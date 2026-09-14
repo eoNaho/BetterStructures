@@ -1,0 +1,5 @@
+# Earlier versions automatically enabled EliteMobs worlds. Preserve the original
+# file before regenerating world settings with the current ownership-aware defaults.
+# The replacement uses "Valid worlds v2", so it does not match this rule again.
+ValidWorlds.yml:
+  - Valid worlds

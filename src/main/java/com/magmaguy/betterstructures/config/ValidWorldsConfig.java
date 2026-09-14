@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 
 public class ValidWorldsConfig extends ConfigurationFile {
-    private static final String VALID_WORLDS_KEY = "Valid worlds";
+    private static final String VALID_WORLDS_KEY = "Valid worlds v2";
 
     private static final long UNLOAD_PRUNE_DELAY_TICKS = 20L * 10L;
     private static final HashMap<String, Boolean> validWorlds = new HashMap<>();
