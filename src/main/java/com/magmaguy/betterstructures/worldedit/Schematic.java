@@ -23,6 +23,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.block.TileState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
@@ -44,6 +45,8 @@ public class Schematic {
     private static PasteOperation activePasteOperation = null;
 
     private static final EnumSet<Material> NBT_PASTED_MATERIALS = EnumSet.noneOf(Material.class);
+    // Paste operations run on the server thread. Classify each destination material once.
+    private static final Map<Material, Boolean> BLOCK_ENTITY_MATERIALS = new EnumMap<>(Material.class);
 
     static {
         for (Material material : Material.values()) {
@@ -311,7 +314,14 @@ public class Schematic {
 
     private static void pasteBlock(PasteBlock pasteBlock) {
         if (pasteBlock.blockData() != null) {
-            pasteBlock.block().setBlockData(pasteBlock.blockData());
+            Block destination = pasteBlock.block();
+            if (BLOCK_ENTITY_MATERIALS.computeIfAbsent(destination.getType(),
+                    material -> material.createBlockData().createBlockState() instanceof TileState)) {
+                // Materialize pending saved NBT before changing its block type. Otherwise
+                // Paper can try to load the old block entity against the replacement state.
+                destination.getState();
+            }
+            destination.setBlockData(pasteBlock.blockData());
         } else if (pasteBlock.clipboard() != null) {
             try (EditSession editSession = WorldEdit.getInstance().newEditSession(
                     BukkitAdapter.adapt(pasteBlock.block().getLocation().getWorld()))) {
