@@ -65,6 +65,12 @@ public final class ModulePasting {
     private final Location startLocation;
     private final boolean createModularWorld;
     private final List<NbtPlacement> nbtToPlace = new ArrayList<>();
+    private record PreparedState(Material material, BlockData blockData) { }
+    private final Map<BlockState, PreparedState> preparedStates = new java.util.LinkedHashMap<>(128, .75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<BlockState, PreparedState> eldest) {
+            return size() > 4096;
+        }
+    };
     private ModularWorld modularWorld;
     private final World world;
     private final File worldFolder;
@@ -204,12 +210,17 @@ public final class ModulePasting {
         // carves the walkable interiors out of the terrain. Only void worlds can skip it.
         if (createModularWorld && WorldEditUtils.isAir(blockState)) return null;
 
-        Material material = WorldEditUtils.adaptMaterial(blockState);
+        PreparedState prepared = preparedStates.computeIfAbsent(blockState, state -> {
+            Material material = WorldEditUtils.adaptMaterial(state);
+            return new PreparedState(material, material == null || material == Material.BARRIER
+                    ? null : WorldEditUtils.createBlockDataOrNull(baseBlock));
+        });
+        Material material = prepared.material();
 
         // Skip barriers
         if (material == Material.BARRIER) return null;
 
-        BlockData blockData = material == null ? null : WorldEditUtils.createBlockDataOrNull(baseBlock);
+        BlockData blockData = prepared.blockData();
         if (blockData == null) {
             if (collect) nbtToPlace.add(new NbtPlacement(pasteLocation, baseBlock));
             return null;
@@ -217,7 +228,7 @@ public final class ModulePasting {
 
         // Handle signs - collect instructions then turn into AIR
         if (SIGN_MATERIALS.contains(blockData.getMaterial())) {
-            List<String> lines = getLines(baseBlock);
+            List<String> lines = collect ? getLines(baseBlock) : List.of();
             if (collect) interpretedSigns.add(new InterpretedSign(pasteLocation, lines));
 
             // Parse sign content for special markers
@@ -366,7 +377,7 @@ public final class ModulePasting {
                             && !(block.blockData() instanceof Sign);
                     if (phase == 0 && fast)
                         NMSManager.getAdapter().setBlockInNativeDataPalette(world, block.location().getBlockX(),
-                                block.location().getBlockY(), block.location().getBlockZ(), block.blockData(), true);
+                                block.location().getBlockY(), block.location().getBlockZ(), block.blockData(), false);
                     else if (phase == 1 && !fast) block.location().getBlock().setBlockData(block.blockData(), false);
                 } else {
                     if (nextEntity == null) { moduleIndex++; module = null; return; }
@@ -454,6 +465,7 @@ public final class ModulePasting {
         }
         public void close() {
             closed = true; chunks.close(); inputs.clear();
+            preparedStates.clear();
             nbtToPlace.clear(); chestsToPlace.clear(); barrelsToFill.clear(); entitiesToSpawn.clear(); interpretedSigns.clear();
             module = null; cursor = null; entityCursor = null; nextBlock = null; nextEntity = null;
         }

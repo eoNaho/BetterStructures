@@ -390,6 +390,7 @@ public class Schematic {
         private final Location adjustedLocation;
         private final Function<Boolean, Material> pedestalMaterialProvider;
         private final PasteCursor cursor;
+        private final PasteChunkReadiness chunks;
         private final Runnable onComplete;
 
         private ClipboardPasteOperation(
@@ -405,7 +406,15 @@ public class Schematic {
                     clipboard.getDimensions().y(),
                     clipboard.getDimensions().z());
             this.onComplete = onComplete;
+            this.chunks = new PasteChunkReadiness(adjustedLocation.getWorld());
         }
+
+        @Override
+        public boolean ready() {
+            return chunks.ready(adjustedLocation.clone().add(cursor.x, cursor.y, cursor.z));
+        }
+
+        @Override public void close() { chunks.close(); }
 
         @Override
         public boolean hasNext() {

@@ -45,6 +45,17 @@ final class DelayedDungeonScanTracker<K> {
         return !deferred.isEmpty();
     }
 
+    int deferredSize() {
+        return deferred.size();
+    }
+
+    K pollDeferred() {
+        var iterator = deferred.iterator();
+        K key = iterator.next();
+        iterator.remove();
+        return key;
+    }
+
     List<K> deferredSnapshot() {
         return List.copyOf(deferred);
     }

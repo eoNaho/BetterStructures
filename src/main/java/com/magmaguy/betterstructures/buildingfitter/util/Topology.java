@@ -141,14 +141,14 @@ public class Topology {
 
     //Scores the terrain variation, less extreme is better
     private static double scoreTerrainHeightVariation(ArrayList<Integer> heights, int averageFloorLevel, double score) {
+        double maxImpact = score / 2D / heights.size();
         //Score the difference between the average height and the heights of each individual location
         for (Integer integer : heights) {
             int difference = Math.abs(averageFloorLevel - integer);
             if (difference < 3) continue;
             //Max impact is 50% of the starting score divided by each point in the search
-            double maxImpact = score / 2D / heights.size();
             //Calculate the score of this specific point, exponential formula
-            double currentHeightScore = (1 - Math.pow(difference, 2) * 4 / 100) * maxImpact;
+            double currentHeightScore = Math.min(1D, Math.pow(difference, 2) * 4 / 100) * maxImpact;
             score -= currentHeightScore;
             if (score < 85)
                 return 0;

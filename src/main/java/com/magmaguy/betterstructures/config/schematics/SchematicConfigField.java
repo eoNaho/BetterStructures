@@ -55,6 +55,10 @@ public class SchematicConfigField extends CustomConfigFields {
     public void processConfigFields() {
         this.isEnabled = processBoolean("isEnabled", isEnabled, true, true);
         this.weight = processDouble("weight", weight, 1, true);
+        if (!Double.isFinite(weight) || weight < 0) {
+            Logger.warn("Invalid weight in " + filename + "; expected a finite nonnegative number. Disabling selection.");
+            weight = 0;
+        }
         this.pedestalMaterial = processEnum("pedestalMaterial", pedestalMaterial, null, Material.class, false);
         this.generatorConfigFilename = processString("generatorConfigFilename", generatorConfigFilename, generatorConfigFilename, true);
         this.generatorConfigFields = GeneratorConfig.getConfigFields(generatorConfigFilename);

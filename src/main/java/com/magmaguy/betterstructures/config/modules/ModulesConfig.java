@@ -26,10 +26,6 @@ public class ModulesConfig extends CustomConfig {
 
     public ModulesConfig() {
         super("modules", ModulesConfigFields.class);
-        moduleConfigurations.clear();
-
-        ModulesContainer.initializeSpecialModules();
-
         File modulesFile = new File(MetadataHandler.PLUGIN.getDataFolder().getAbsolutePath()+ File.separatorChar + "modules");
         if (!modulesFile.exists()) modulesFile.mkdir();
 
@@ -37,7 +33,9 @@ public class ModulesConfig extends CustomConfig {
         //Initialize schematics
         File[] moduleFiles = modulesFile.listFiles();
         List<File> discoveredModuleFiles = new ArrayList<>();
-        if (moduleFiles != null) {
+        if (moduleFiles == null) throw new java.io.UncheckedIOException(
+                new java.io.IOException("Could not enumerate module root: " + modulesFile));
+        {
             for (File file : moduleFiles) {
                 SchematicFileUtils.scanDirectoryForSchematics(file, discoveredModuleFiles);
             }
@@ -69,8 +67,9 @@ public class ModulesConfig extends CustomConfig {
                     }
                     Clipboard clipboard = clipboardCache.get(file);
                     if (clipboard == null) {
-                        clipboard = diskCache.load(file);
-                        if (clipboard != null) clipboardCache.put(file, clipboard);
+                        SchematicDiskCache.LoadedClipboard loaded = diskCache.loadWithIdentity(file);
+                        clipboard = loaded == null ? null : loaded.clipboard();
+                        if (loaded != null) clipboardCache.put(file, loaded);
                     }
                     if (clipboard == null) {
                         throw new IllegalStateException(
@@ -84,6 +83,8 @@ public class ModulesConfig extends CustomConfig {
                 diskCache.pruneStaleEntries(discoveredModuleFiles);
         }
 
+        moduleConfigurations.clear();
+        ModulesContainer.initializeSpecialModules();
         for (File file : discoveredModuleFiles) {
             String configurationName = SchematicFileUtils.convertFromSchematicFilename(file.getName());
             ModulesConfigFields moduleConfigField = new ModulesConfigFields(configurationName, true);
@@ -93,6 +94,7 @@ public class ModulesConfig extends CustomConfig {
             moduleConfigurations.put(configurationName, moduleConfigField);
         }
 
+        ModulesConfigFields.validateCloneGraph(moduleConfigurations.values());
         moduleConfigurations.values().forEach(ModulesConfigFields::validateClones);
 
         for (ModulesConfigFields modulesConfigFields : moduleConfigurations.values()) {

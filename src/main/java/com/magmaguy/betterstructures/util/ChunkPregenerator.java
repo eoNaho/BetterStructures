@@ -255,6 +255,7 @@ public class ChunkPregenerator implements Listener {
             return false; // Already generated or queued
         }
         workload.addWorkload(() -> {
+            if (isCancelled) return;
             queuedChunks.remove(chunkKey);
             generatedChunks.add(chunkKey);
             generateChunk(chunkX, chunkZ, chunkKey);
@@ -266,12 +267,18 @@ public class ChunkPregenerator implements Listener {
         try {
             Chunk chunk = world.getChunkAt(chunkX, chunkZ);
             if (!chunk.isLoaded()) {
-                chunk.load(true);
+                if (!chunk.load(true)) throw new IllegalStateException("Chunk load was refused");
             }
             // Chunk counting is now handled by ChunkLoadEvent listener
         } catch (Exception e) {
             generatedChunks.remove(chunkKey);
             Logger.warn("Failed to generate chunk at (" + chunkX + ", " + chunkZ + "): " + e.getMessage());
+            isCancelled = true;
+            if (beginFinish()) {
+                cleanup();
+                Logger.warn("Chunk pregeneration incomplete. Failed coordinate: " + chunkKey
+                        + "; completed " + generatedChunks.size() + " chunks. World border was not changed.");
+            }
         }
     }
 

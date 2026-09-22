@@ -55,6 +55,8 @@ public class NewChunkLoadEvent implements Listener {
     private static final int MAX_DEFERRED_SCANS_PER_DRAIN = 32;
     private static final long MAX_DEFERRED_SCAN_NANOS = 5_000_000L;
     private static BukkitTask deferredDrainTask;
+    private static int remainingNewInspections;
+    private static int remainingDungeonInspections;
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onChunkLoad(ChunkLoadEvent event) {
@@ -126,6 +128,14 @@ public class NewChunkLoadEvent implements Listener {
     }
 
     private static void scheduleDeferredDrain() {
+        scheduleDeferredDrain(true);
+    }
+
+    private static void scheduleDeferredDrain(boolean wakeup) {
+        if (wakeup) {
+            remainingNewInspections = deferredNewChunks.size();
+            remainingDungeonInspections = delayedDungeonScans.deferredSize();
+        }
         if (BetterStructures.isReloading()
                 || (deferredNewChunks.isEmpty() && !delayedDungeonScans.hasDeferred())
                 || deferredDrainTask != null || MetadataHandler.PLUGIN == null
@@ -141,82 +151,52 @@ public class NewChunkLoadEvent implements Listener {
     }
 
     private static void drainDeferredNewChunks() {
-        if (BetterStructures.isReloading()
-                || (deferredNewChunks.isEmpty() && !delayedDungeonScans.hasDeferred())
-                || MetadataHandler.PLUGIN == null || !MetadataHandler.PLUGIN.isEnabled()) return;
-
+        if (BetterStructures.isReloading() || MetadataHandler.PLUGIN == null || !MetadataHandler.PLUGIN.isEnabled()) return;
         long started = System.nanoTime();
-        Set<LoadingChunkKey> attempted = new HashSet<>();
-        int attempts = 0;
-        for (LoadingChunkKey loadingChunkKey : new ArrayList<>(deferredNewChunks)) {
-            if (attempts >= MAX_DEFERRED_SCANS_PER_DRAIN
-                    || (attempts > 0 && System.nanoTime() - started >= MAX_DEFERRED_SCAN_NANOS)) break;
-            World world = Bukkit.getWorld(loadingChunkKey.worldId());
-            if (world == null || !world.isChunkLoaded(
-                    loadingChunkKey.x(), loadingChunkKey.z())) continue;
-
-            attempted.add(loadingChunkKey);
-            attempts++;
-            Chunk chunk = world.getChunkAt(loadingChunkKey.x(), loadingChunkKey.z());
+        int inspected = 0;
+        while (remainingNewInspections > 0 && !deferredNewChunks.isEmpty()
+                && inspected < MAX_DEFERRED_SCANS_PER_DRAIN
+                && System.nanoTime() - started < MAX_DEFERRED_SCAN_NANOS) {
+            var iterator = deferredNewChunks.iterator();
+            LoadingChunkKey key = iterator.next();
+            iterator.remove();
+            remainingNewInspections--;
+            inspected++;
+            World world = Bukkit.getWorld(key.worldId());
+            if (world == null || !world.isChunkLoaded(key.x(), key.z())) {
+                deferredNewChunks.add(key);
+                continue;
+            }
             try {
-                boolean scanned = chunkScanReentrancyGuard.runIfIdle(
-                        () -> scanNewChunk(chunk, loadingChunkKey));
-                if (scanned) {
-                    deferredNewChunks.remove(loadingChunkKey);
-                    delayedDungeonScans.removeDeferred(loadingChunkKey);
+                Chunk chunk = world.getChunkAt(key.x(), key.z());
+                if (chunkScanReentrancyGuard.runIfIdle(() -> scanNewChunk(chunk, key))) {
+                    delayedDungeonScans.removeDeferred(key);
                 } else {
-                    scheduleDeferredDrain();
-                    return;
+                    deferredNewChunks.add(key);
                 }
-            } catch (Throwable throwable) {
-                MetadataHandler.PLUGIN.getLogger().warning(
-                        "Failed to replay deferred new-chunk scan for "
-                                + world.getName() + " " + loadingChunkKey.x()
-                                + "," + loadingChunkKey.z() + ": "
-                                + throwable.getMessage());
-                throwable.printStackTrace();
+            } catch (Throwable failure) {
+                deferredNewChunks.add(key);
+                MetadataHandler.PLUGIN.getLogger().warning("Failed deferred chunk scan at " + key + ": " + failure.getMessage());
             }
         }
-
-        for (LoadingChunkKey loadingChunkKey : delayedDungeonScans.deferredSnapshot()) {
-            if (attempts >= MAX_DEFERRED_SCANS_PER_DRAIN) break;
-            // A full deferred scan includes its dungeon scan and must run first.
-            if (deferredNewChunks.contains(loadingChunkKey)) continue;
-            World world = Bukkit.getWorld(loadingChunkKey.worldId());
-            if (world == null || !world.isChunkLoaded(
-                    loadingChunkKey.x(), loadingChunkKey.z())) continue;
-
-            attempted.add(loadingChunkKey);
-            attempts++;
-            delayedDungeonScans.removeDeferred(loadingChunkKey);
-            scheduleDungeonScanner(loadingChunkKey);
-        }
-
-        // A scan can synchronously load a key that was unloaded when this
-        // snapshot reached it, and a large reload can exceed the per-tick cap.
-        // Continue only when an unattempted queued key is already loaded; keys
-        // that remain unloaded wait for their next normal load event.
-        for (LoadingChunkKey loadingChunkKey : deferredNewChunks) {
-            if (attempted.contains(loadingChunkKey)) continue;
-            World world = Bukkit.getWorld(loadingChunkKey.worldId());
-            if (world != null && world.isChunkLoaded(
-                    loadingChunkKey.x(), loadingChunkKey.z())) {
-                scheduleDeferredDrain();
-                return;
+        while (remainingDungeonInspections > 0 && delayedDungeonScans.hasDeferred()
+                && inspected < MAX_DEFERRED_SCANS_PER_DRAIN
+                && System.nanoTime() - started < MAX_DEFERRED_SCAN_NANOS) {
+            LoadingChunkKey key = delayedDungeonScans.pollDeferred();
+            remainingDungeonInspections--;
+            inspected++;
+            World world = Bukkit.getWorld(key.worldId());
+            if (deferredNewChunks.contains(key) || world == null || !world.isChunkLoaded(key.x(), key.z())) {
+                delayedDungeonScans.defer(key);
+                continue;
             }
+            scheduleDungeonScanner(key);
         }
-        for (LoadingChunkKey loadingChunkKey : delayedDungeonScans.deferredSnapshot()) {
-            if (attempted.contains(loadingChunkKey)
-                    || deferredNewChunks.contains(loadingChunkKey)) continue;
-            World world = Bukkit.getWorld(loadingChunkKey.worldId());
-            if (world != null && world.isChunkLoaded(
-                    loadingChunkKey.x(), loadingChunkKey.z())) {
-                scheduleDeferredDrain();
-                return;
-            }
-        }
+        if (deferredNewChunks.isEmpty()) remainingNewInspections = 0;
+        if (!delayedDungeonScans.hasDeferred()) remainingDungeonInspections = 0;
+        // Complete at most one bounded traversal per wakeup. Dormant chunks await their next load event.
+        if (remainingNewInspections > 0 || remainingDungeonInspections > 0) scheduleDeferredDrain(false);
     }
-
     private static void cancelDeferredDrain() {
         if (deferredDrainTask == null) return;
         deferredDrainTask.cancel();
@@ -245,6 +225,7 @@ public class NewChunkLoadEvent implements Listener {
 
     private static void rememberGeneratedChunk(LoadingChunkKey key) {
         purgeExpiredGeneratedChunks();
+        recentlyGeneratedChunks.remove(key);
         recentlyGeneratedChunks.put(key, System.nanoTime());
         while (recentlyGeneratedChunks.size() > MAX_RECENT_NEW_CHUNKS) {
             var iterator = recentlyGeneratedChunks.keySet().iterator();
@@ -256,13 +237,22 @@ public class NewChunkLoadEvent implements Listener {
 
     private static void purgeExpiredGeneratedChunks() {
         long cutoff = System.nanoTime() - RECENT_NEW_CHUNK_NANOS;
-        recentlyGeneratedChunks.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+        var iterator = recentlyGeneratedChunks.entrySet().iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next().getValue() >= cutoff) break;
+            iterator.remove();
+        }
     }
 
     private static boolean wasRecentlyGenerated(UUID worldId, NaturalDungeonReservation.ChunkCoordinate coordinate) {
-        purgeExpiredGeneratedChunks();
-        return recentlyGeneratedChunks.containsKey(
-                new LoadingChunkKey(worldId, coordinate.x(), coordinate.z()));
+        LoadingChunkKey key = new LoadingChunkKey(worldId, coordinate.x(), coordinate.z());
+        Long observed = recentlyGeneratedChunks.get(key);
+        if (observed == null) return false;
+        if (System.nanoTime() - observed > RECENT_NEW_CHUNK_NANOS) {
+            recentlyGeneratedChunks.remove(key);
+            return false;
+        }
+        return true;
     }
 
     private static void scheduleDungeonScanner(LoadingChunkKey loadingChunkKey) {

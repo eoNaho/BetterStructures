@@ -16,6 +16,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.HexFormat;
+import java.util.concurrent.TimeUnit;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -89,9 +93,8 @@ public final class SchematicDiskCache {
      * Loads a schematic, going through the on-disk cache of already-converted copies.
      */
     public Clipboard load(File schematicFile) {
-        Clipboard clipboard = loadThroughCache(schematicFile);
-        if (clipboard != null) filesRead.incrementAndGet();
-        return clipboard;
+        LoadedClipboard loaded = loadWithIdentity(schematicFile);
+        return loaded == null ? null : loaded.clipboard();
     }
 
     /**
@@ -104,23 +107,56 @@ public final class SchematicDiskCache {
         return filesRead.get();
     }
 
-    private Clipboard loadThroughCache(File schematicFile) {
-        String key = cacheKey(schematicFile);
-        if (key == null) return Schematic.load(schematicFile);
-        computedKeys.put(schematicFile, key);
+    /** The identity and parsed value always describe the same captured bytes. */
+    public record SourceIdentity(long size, long lastModifiedNanos, String sha256) {}
+    public record LoadedClipboard(Clipboard clipboard, SourceIdentity identity) {}
 
-        File cacheFile = cacheIndex.get(key);
-        if (cacheFile != null) {
-            Clipboard cached = readVerifiedCacheEntry(cacheFile);
-            if (cached != null) return cached;
-            //Unreadable, or its contents no longer match the name it is filed under. Either way it
-            //cannot be trusted, so drop it and convert from the original.
-            cacheFile.delete();
+    public LoadedClipboard loadWithIdentity(File schematicFile) {
+        Path snapshot = null;
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(schematicFile.toPath(), BasicFileAttributes.class);
+            String suffix = schematicFile.getName().endsWith(".schematic") ? ".schematic" : ".schem";
+            snapshot = Files.createTempFile("betterstructures-source-", suffix);
+            MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            long size = 0;
+            // Stream to an owned file: parsing cannot race a replacement of the source path,
+            // and source size does not determine temporary heap consumption.
+            try (var input = Files.newInputStream(schematicFile.toPath());
+                 var output = Files.newOutputStream(snapshot)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                    sha1.update(buffer, 0, read);
+                    sha256.update(buffer, 0, read);
+                    size += read;
+                }
+            }
+            SourceIdentity identity = new SourceIdentity(size,
+                    attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS),
+                    HexFormat.of().formatHex(sha256.digest()));
+            String key = keyForDigest(HexFormat.of().formatHex(sha1.digest()));
+            computedKeys.put(schematicFile, key);
+            File cacheFile = cacheIndex.get(key);
+            Clipboard clipboard = cacheFile == null ? null : readVerifiedCacheEntry(cacheFile);
+            if (clipboard == null) {
+                if (cacheFile != null) Files.deleteIfExists(cacheFile.toPath());
+                clipboard = Schematic.load(snapshot.toFile());
+                if (clipboard != null && cacheFolder.isDirectory()) writeCache(clipboard, key, schematicFile);
+            }
+            if (clipboard == null) return null;
+            filesRead.incrementAndGet();
+            return new LoadedClipboard(clipboard, identity);
+        } catch (IOException | NoSuchAlgorithmException exception) {
+            Logger.warn("Could not capture schematic " + schematicFile.getName() + ": " + exception.getMessage());
+            return null;
+        } finally {
+            if (snapshot != null) {
+                try { Files.deleteIfExists(snapshot); }
+                catch (IOException failure) { Logger.warn("Could not remove schematic snapshot " + snapshot + ": " + failure.getMessage()); }
+            }
         }
-
-        Clipboard clipboard = Schematic.load(schematicFile);
-        if (clipboard != null && cacheFolder.isDirectory()) writeCache(clipboard, key, schematicFile);
-        return clipboard;
     }
 
     /**
@@ -192,10 +228,20 @@ public final class SchematicDiskCache {
      */
     private static String cacheKey(File schematicFile) {
         try {
-            return hashOf(Files.readAllBytes(schematicFile.toPath())) + "-" + Bukkit.getUnsafe().getDataVersion() + "-" + worldEditVersion();
+            MessageDigest digest = MessageDigest.getInstance("SHA-1");
+            try (var input = Files.newInputStream(schematicFile.toPath())) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read);
+            }
+            return keyForDigest(HexFormat.of().formatHex(digest.digest()));
         } catch (Exception exception) {
             return null;
         }
+    }
+
+    private static String keyForDigest(String digest) {
+        return digest + "-" + Bukkit.getUnsafe().getDataVersion() + "-" + worldEditVersion();
     }
 
     private static String worldEditVersion() {

@@ -885,11 +885,13 @@ public class DefaultChestContents {
                 Material.NETHERITE_LEGGINGS,
                 Material.NETHERITE_BOOTS);
 
+        Enchantment[] enchantments = Enchantment.values();
         for (Material enchantableItem : enchantableItems) {
             Map<String, Map<String, Object>> enchantmentMap = new HashMap<>();
-            for (Enchantment enchantment : Enchantment.values()) {
+            ItemStack item = new ItemStack(enchantableItem);
+            for (Enchantment enchantment : enchantments) {
                 if (!NamespacedKey.MINECRAFT.equals(enchantment.getKey().getNamespace())) continue;
-                if (!enchantment.canEnchantItem(new ItemStack(enchantableItem))) continue;
+                if (!enchantment.canEnchantItem(item)) continue;
                 Map<String, Object> enchantmentSettingsMap = new HashMap<>();
                 int minLevel = enchantment.getStartLevel();
                 int maxLevel = enchantment.getMaxLevel();

@@ -52,8 +52,6 @@ public class SchematicConfig extends CustomConfig {
 
     public SchematicConfig() {
         super("schematics", SchematicConfigField.class);
-        schematicConfigurations.clear();
-
         File readMeFile = new File(MetadataHandler.PLUGIN.getDataFolder(), "schematics" + File.separatorChar + "ReadMe.txt");
         if (!readMeFile.exists()) {
             readMeFile.getParentFile().mkdirs();
@@ -64,8 +62,9 @@ public class SchematicConfig extends CustomConfig {
         long phaseStart = System.nanoTime();
         List<File> schematicFilesList = new ArrayList<>();
         File[] schematicFiles = readMeFile.getParentFile().listFiles();
-        if (schematicFiles != null)
-            for (File file : schematicFiles) SchematicFileUtils.scanDirectoryForSchematics(file, schematicFilesList);
+        if (schematicFiles == null) throw new java.io.UncheckedIOException(
+                new java.io.IOException("Could not enumerate schematic root: " + readMeFile.getParentFile()));
+        for (File file : schematicFiles) SchematicFileUtils.scanDirectoryForSchematics(file, schematicFilesList);
         // Resolve filename collisions before reading clipboards or generating their configurations.
         schematicFilesList = ContentFileSelector.select(schematicFilesList);
 
@@ -82,6 +81,7 @@ public class SchematicConfig extends CustomConfig {
                     entry.getKey());
         }
 
+        schematicConfigurations.clear();
         for (File file : clipboards.keySet()) {
             String configurationName = SchematicFileUtils.convertFromSchematicFilename(file.getName());
             SchematicConfigField schematicConfigField = new SchematicConfigField(configurationName, true);
@@ -320,10 +320,11 @@ public class SchematicConfig extends CustomConfig {
             return cached;
         }
 
-        Clipboard clipboard = diskCache.load(schematicFile);
+        SchematicDiskCache.LoadedClipboard loaded = diskCache.loadWithIdentity(schematicFile);
+        Clipboard clipboard = loaded == null ? null : loaded.clipboard();
         activeLoad.checkRunning();
         if (clipboard != null) {
-            clipboardCache.put(schematicFile, clipboard);
+            clipboardCache.put(schematicFile, loaded);
             activeLoad.checkRunning();
         }
         return clipboard;

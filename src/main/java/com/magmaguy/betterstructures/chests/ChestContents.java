@@ -20,7 +20,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public class ChestContents {
 
     private final List<ChestRarity> chestRarities = new ArrayList<>();
-    private final TreasureConfigFields treasureConfigFields;
+    @Getter private final TreasureConfigFields treasureConfigFields;
     //Rarities and their weights never change after construction, so the weight map is built once
     //instead of being rebuilt for every chest roll
     private final HashMap<Integer, Double> rarityWeights = new HashMap<>();
@@ -55,7 +55,9 @@ public class ChestContents {
 
     private double getWeight(String string) {
         try {
-            return Double.parseDouble(string);
+            double weight = Double.parseDouble(string);
+            if (!Double.isFinite(weight) || weight < 0) throw new IllegalArgumentException("Invalid weight");
+            return weight;
         } catch (Exception exception) {
             Logger.warn("Invalid double value detected! Problematic entry: " + string + " in configuration file " + treasureConfigFields.getFilename());
             return -1;
@@ -147,7 +149,7 @@ public class ChestContents {
                     default -> Logger.warn("Failed to read key " + entry.getKey() + " for configuration file " + treasureConfigFields.getFilename());
                 }
             }
-            if (material != null || itemStack != null) {
+            if (weight >= 0 && (material != null || itemStack != null)) {
                 ChestEntry chestEntry = new ChestEntry(material, weight, minAmount, maxAmount, itemStack, procedurallyGeneratedEnchantments, treasureConfigFields);
                 chestEntries.add(chestEntry);
             }
@@ -156,24 +158,30 @@ public class ChestContents {
     }
 
     public void rollChestContents(Container chest) {
+        List<Integer> freeSlots = new ArrayList<>();
+        for (int i = 0; i < chest.getSnapshotInventory().getSize(); i++) {
+            ItemStack existing = chest.getSnapshotInventory().getItem(i);
+            if (existing == null || existing.getType().isAir()) freeSlots.add(i);
+        }
+        if (freeSlots.isEmpty()) return;
         // Roll custom loot if available
         if (!chestRarities.isEmpty()) {
-            rollCustomLoot(chest);
+            rollCustomLoot(chest, freeSlots);
         }
 
         // Roll vanilla loot if available
         LootTables vanillaTreasure = treasureConfigFields.getVanillaTreasure();
-        if (vanillaTreasure != null) {
-            rollVanillaLoot(chest, vanillaTreasure);
+        if (vanillaTreasure != null && !freeSlots.isEmpty()) {
+            rollVanillaLoot(chest, vanillaTreasure, freeSlots);
         }
     }
 
-    private void rollCustomLoot(Container chest) {
+    private void rollCustomLoot(Container chest, List<Integer> freeSlots) {
         int amount = (int) Math.max(Math.ceil(ThreadLocalRandom.current().nextGaussian(treasureConfigFields.getMean(), treasureConfigFields.getStandardDeviation())), 0);
         //Guarantee that at least one item will drop
         amount++;
 
-        for (int i = 0; i < amount; i++) {
+        for (int i = 0; i < amount && !freeSlots.isEmpty(); i++) {
             Integer rarityIndex = WeighedProbability.pickWeightedProbability(rarityWeights);
             if (rarityIndex == null) {
                 //Only possible with broken weights (all zero/negative); guard instead of NPE-ing
@@ -185,31 +193,28 @@ public class ChestContents {
             }
             ItemStack itemStack = chestRarities.get(rarityIndex).rollLoot();
             if (itemStack != null) {
-                placeItemInChest(chest, itemStack);
+                placeItemInChest(chest, itemStack, freeSlots);
             }
         }
     }
 
-    private void rollVanillaLoot(Container chest, LootTables lootTable) {
+    private void rollVanillaLoot(Container chest, LootTables lootTable, List<Integer> freeSlots) {
         LootContext lootContext = new LootContext.Builder(chest.getLocation()).build();
         Collection<ItemStack> loot = lootTable.getLootTable().populateLoot(ThreadLocalRandom.current(), lootContext);
         for (ItemStack itemStack : loot) {
+            if (freeSlots.isEmpty()) break;
             if (itemStack != null && itemStack.getType() != Material.AIR) {
-                placeItemInChest(chest, itemStack);
+                placeItemInChest(chest, itemStack, freeSlots);
             }
         }
     }
 
-    private void placeItemInChest(Container chest, ItemStack itemStack) {
-        int counter = 0;
-        while (counter < 100) {
-            int randomizedIndex = ThreadLocalRandom.current().nextInt(0, chest.getSnapshotInventory().getSize());
-            if (chest.getSnapshotInventory().getItem(randomizedIndex) == null) {
-                chest.getSnapshotInventory().setItem(randomizedIndex, itemStack);
-                break;
-            }
-            counter++;
-        }
+    private void placeItemInChest(Container chest, ItemStack itemStack, List<Integer> freeSlots) {
+        int index = ThreadLocalRandom.current().nextInt(freeSlots.size());
+        int slot = freeSlots.get(index);
+        freeSlots.set(index, freeSlots.get(freeSlots.size() - 1));
+        freeSlots.remove(freeSlots.size() - 1);
+        chest.getSnapshotInventory().setItem(slot, itemStack);
     }
 
     private class ChestRarity {

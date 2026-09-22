@@ -29,6 +29,10 @@ public class SchematicContainer {
     @Getter
     private static final ArrayListMultimap<GeneratorConfigFields.StructureType, SchematicContainer> schematics = ArrayListMultimap.create();
     private static final Map<Object, String> BIOME_ID_CACHE = new ConcurrentHashMap<>();
+    private static final Map<Clipboard, SourceMarkers> SOURCE_MARKERS =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private record SourceMarkers(List<Vector> chests, Map<Vector, EntityType> vanilla,
+                                 Map<Vector, String> elite, Map<Vector, String> mythic) { }
     private static volatile boolean eliteMobsAvailable;
     private static volatile boolean mythicMobsAvailable;
     @Getter
@@ -74,76 +78,83 @@ public class SchematicContainer {
             valid = false;
             return;
         }
-        for (int x = 0; x < clipboard.getDimensions().x(); x++)
-            for (int y = 0; y < clipboard.getDimensions().y(); y++)
-                for (int z = 0; z < clipboard.getDimensions().z(); z++) {
-                    BlockVector3 translatedLocation = BlockVector3.at(x, y, z).add(clipboard.getMinimumPoint());
-                    BlockState weBlockState = clipboard.getBlock(translatedLocation);
-                    Material minecraftMaterial = WorldEditUtils.adaptMaterial(weBlockState);
-                    if (minecraftMaterial == null) continue;
-                    //register chest location
-                    if (minecraftMaterial.equals(Material.CHEST) ||
-                            minecraftMaterial.equals(Material.TRAPPED_CHEST) ||
-                            minecraftMaterial.equals(Material.SHULKER_BOX) ||
-                            minecraftMaterial.equals(Material.BARREL)) {
-                        chestLocations.add(new Vector(x, y, z));
-                    }
-                    if (isSign(minecraftMaterial)) {
-                        BaseBlock baseBlock = clipboard.getFullBlock(translatedLocation);
-                        //For future reference, I don't know how to get the data in any other way than parsing the string. Sorry!
-                        String line1 = WorldEditUtils.getLine(baseBlock, 1);
-                        if (line1 == null || line1.isBlank()) continue;
+        SourceMarkers markers = SOURCE_MARKERS.get(clipboard);
+        if (markers == null) {
+            for (int x = 0; x < clipboard.getDimensions().x(); x++)
+                for (int y = 0; y < clipboard.getDimensions().y(); y++)
+                    for (int z = 0; z < clipboard.getDimensions().z(); z++) {
+                        BlockVector3 translatedLocation = BlockVector3.at(x, y, z).add(clipboard.getMinimumPoint());
+                        BlockState weBlockState = clipboard.getBlock(translatedLocation);
+                        Material minecraftMaterial = WorldEditUtils.adaptMaterial(weBlockState);
+                        if (minecraftMaterial == null) continue;
+                        //register chest location
+                        if (minecraftMaterial.equals(Material.CHEST) ||
+                                minecraftMaterial.equals(Material.TRAPPED_CHEST) ||
+                                minecraftMaterial.equals(Material.SHULKER_BOX) ||
+                                minecraftMaterial.equals(Material.BARREL)) {
+                            chestLocations.add(new Vector(x, y, z));
+                        }
+                        if (isSign(minecraftMaterial)) {
+                            BaseBlock baseBlock = clipboard.getFullBlock(translatedLocation);
+                            //For future reference, I don't know how to get the data in any other way than parsing the string. Sorry!
+                            String line1 = WorldEditUtils.getLine(baseBlock, 1);
+                            if (line1 == null || line1.isBlank()) continue;
 
-                        //Case for spawning a vanilla mob
-                        if (line1.toLowerCase(Locale.ROOT).contains("[spawn]")) {
-                            String rawLine2 = WorldEditUtils.getLine(baseBlock, 2);
-                            if (rawLine2 == null || rawLine2.isBlank()) {
-                                Logger.warn("Missing entity type for spawn sign in schematic " + clipboardFilename);
-                                continue;
-                            }
-                            String line2 = rawLine2.toUpperCase(Locale.ROOT).replace("\"", "");
-                            EntityType entityType;
-                            try {
-                                entityType = EntityType.valueOf(line2);
-                            } catch (Exception ex) {
-                                if (line2.equalsIgnoreCase("WITHER_CRYSTAL"))
-                                    entityType = EntityType.END_CRYSTAL;
-                                else {
-                                    Logger.warn("Failed to determine entity type for sign! Entry was " + line2 + " in schematic " + clipboardFilename + " ! Fix this by inputting a valid entity type!");
+                            //Case for spawning a vanilla mob
+                            if (line1.toLowerCase(Locale.ROOT).contains("[spawn]")) {
+                                String rawLine2 = WorldEditUtils.getLine(baseBlock, 2);
+                                if (rawLine2 == null || rawLine2.isBlank()) {
+                                    Logger.warn("Missing entity type for spawn sign in schematic " + clipboardFilename);
                                     continue;
                                 }
-                            }
-                            vanillaSpawns.put(new Vector(x, y, z), entityType);
-                        } else if (line1.toLowerCase(Locale.ROOT).contains("[elitemobs]")) {
-                            if (!eliteMobsAvailable) {
-                                Logger.warn(configFilename + " uses EliteMobs bosses but EliteMobs is not installed; this schematic will not be used.");
-                                valid = false;
-                                return;
-                            }
-                            String filename = "";
-                            for (int i = 2; i < 5; i++) filename += WorldEditUtils.getLine(baseBlock, i);
-                            eliteMobsSpawns.put(new Vector(x, y, z), filename);
-                        } else if (line1.toLowerCase(Locale.ROOT).contains("[mythicmobs]")) { // carm start - Support MythicMobs
-                            if (!mythicMobsAvailable) {
-                                Logger.warn(configFilename + " uses MythicMobs bosses but MythicMobs is not installed; this schematic will not be used.");
-                                valid = false;
-                                return;
-                            }
-                            String mob = WorldEditUtils.getLine(baseBlock, 2);
-                            String level = WorldEditUtils.getLine(baseBlock, 3);
-                            if (mob == null || mob.isBlank()) {
-                                Logger.warn("Missing MythicMobs entity ID for spawn sign in schematic "
-                                        + clipboardFilename);
-                                continue;
-                            }
-                            mythicMobsSpawns.put(
-                                    new Vector(x, y, z),
-                                    mob + (level == null || level.isBlank()
-                                            ? ""
-                                            : ":" + level));
-                        } // carm end - Support MythicMobs
+                                String line2 = rawLine2.toUpperCase(Locale.ROOT).replace("\"", "");
+                                EntityType entityType;
+                                try {
+                                    entityType = EntityType.valueOf(line2);
+                                } catch (Exception ex) {
+                                    if (line2.equalsIgnoreCase("WITHER_CRYSTAL"))
+                                        entityType = EntityType.END_CRYSTAL;
+                                    else {
+                                        Logger.warn("Failed to determine entity type for sign! Entry was " + line2 + " in schematic " + clipboardFilename + " ! Fix this by inputting a valid entity type!");
+                                        continue;
+                                    }
+                                }
+                                vanillaSpawns.put(new Vector(x, y, z), entityType);
+                            } else if (line1.toLowerCase(Locale.ROOT).contains("[elitemobs]")) {
+                                String filename = "";
+                                for (int i = 2; i < 5; i++) filename += WorldEditUtils.getLine(baseBlock, i);
+                                eliteMobsSpawns.put(new Vector(x, y, z), filename);
+                            } else if (line1.toLowerCase(Locale.ROOT).contains("[mythicmobs]")) { // carm start - Support MythicMobs
+                                String mob = WorldEditUtils.getLine(baseBlock, 2);
+                                String level = WorldEditUtils.getLine(baseBlock, 3);
+                                if (mob == null || mob.isBlank()) {
+                                    Logger.warn("Missing MythicMobs entity ID for spawn sign in schematic "
+                                            + clipboardFilename);
+                                    continue;
+                                }
+                                mythicMobsSpawns.put(
+                                        new Vector(x, y, z),
+                                        mob + (level == null || level.isBlank()
+                                                ? ""
+                                                : ":" + level));
+                            } // carm end - Support MythicMobs
+                        }
                     }
-                }
+                markers = new SourceMarkers(chestLocations.stream().map(Vector::clone).toList(),
+                    copyMarkers(vanillaSpawns), copyMarkers(eliteMobsSpawns), copyMarkers(mythicMobsSpawns));
+            SOURCE_MARKERS.put(clipboard, markers);
+        } else {
+            markers.chests().forEach(vector -> chestLocations.add(vector.clone()));
+            vanillaSpawns.putAll(copyMarkers(markers.vanilla()));
+            eliteMobsSpawns.putAll(copyMarkers(markers.elite()));
+            mythicMobsSpawns.putAll(copyMarkers(markers.mythic()));
+        }
+        if ((!eliteMobsAvailable && !eliteMobsSpawns.isEmpty())
+                || (!mythicMobsAvailable && !mythicMobsSpawns.isEmpty())) {
+            Logger.warn(configFilename + " requires an unavailable mob integration; this schematic will not be used.");
+            valid = false;
+            return;
+        }
         chestContents = generatorConfigFields.getChestContents();
         barrelContents = generatorConfigFields.getBarrelContents();
         if (schematicConfigField.getTreasureFile() != null && !schematicConfigField.getTreasureFile().isEmpty()) {
@@ -168,6 +179,12 @@ public class SchematicContainer {
 
     private static boolean isSign(Material material) {
         return material.name().endsWith("_SIGN") || material.name().endsWith("_WALL_SIGN");
+    }
+
+    private static <T> Map<Vector, T> copyMarkers(Map<Vector, T> source) {
+        Map<Vector, T> copy = new HashMap<>();
+        source.forEach((position, value) -> copy.put(position.clone(), value));
+        return copy;
     }
 
     public static void shutdown() {

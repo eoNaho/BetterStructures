@@ -192,12 +192,12 @@ public final class BetterStructures extends JavaPlugin {
         new ModuleGeneratorsConfig();
         initializationContext.step("Spawn Pools");
         new SpawnPoolsConfig();
+        initializationContext.step("Content Packages");
+        new ContentPackageConfig();
         initializationContext.step("Schematics");
         new SchematicConfig();
         initializationContext.step("Modules");
         new ModulesConfig();
-        initializationContext.step("Content Packages");
-        new ContentPackageConfig();
     }
 
     private void syncInitialization(PluginInitializationContext initializationContext) {
@@ -312,9 +312,9 @@ public final class BetterStructures extends JavaPlugin {
                 new GeneratorConfig();
                 new ModuleGeneratorsConfig();
                 new SpawnPoolsConfig();
+                new ContentPackageConfig();
                 new SchematicConfig();
                 new ModulesConfig();
-                new ContentPackageConfig();
                 BSPackageRefresher.reset();
                 ComponentsConfigFolder.initialize();
 

@@ -16,12 +16,15 @@ public class WFCLattice {
         final Vector3i nodePosition;
         final ModulesContainer chosenModule;
         final Set<Vector3i> affectedNeighbors;
+        final Set<ModulesContainer> triedModules;
 
         CollapseDecision(Vector3i nodePosition, ModulesContainer chosenModule,
-                         Set<Vector3i> affectedNeighbors) {
+                         Set<Vector3i> affectedNeighbors, Set<ModulesContainer> triedModules) {
             this.nodePosition = nodePosition;
             this.chosenModule = chosenModule;
             this.affectedNeighbors = affectedNeighbors;
+            this.triedModules = triedModules;
+            this.triedModules.add(chosenModule);
         }
     }
     private static final Map<Direction, Vector3i> DIRECTION_OFFSETS = new EnumMap<>(Direction.class);
@@ -36,6 +39,8 @@ public class WFCLattice {
     
     // Backtracking system
     private final Deque<CollapseDecision> decisionStack = new ArrayDeque<>();
+    private record Alternatives(CollapseDecision parent, Set<ModulesContainer> tried) { }
+    private final Map<Vector3i, Alternatives> alternatives = new HashMap<>();
 
     static {
         initializeDirectionOffsets();
@@ -101,6 +106,10 @@ public class WFCLattice {
                 hasCollapsedNonEmptyNeighbors = true;
         if (!hasCollapsedNonEmptyNeighbors) return;
         node.updatePossibleStates();
+        Alternatives previous = alternatives.get(node.getCellLocation());
+        if (previous != null && previous.parent() == decisionStack.peek() && node.getValidOptions() != null) {
+            node.getValidOptions().removeAll(previous.tried());
+        }
         entropyQueue.add(node);
     }
 
@@ -115,10 +124,14 @@ public class WFCLattice {
             }
         }
         
+        Alternatives previous = alternatives.remove(node.getCellLocation());
+        Set<ModulesContainer> tried = previous != null && previous.parent() == decisionStack.peek()
+                ? previous.tried() : new HashSet<>();
         decisionStack.push(new CollapseDecision(
             node.getCellLocation(), 
             chosenModule, 
-            affectedNeighbors
+            affectedNeighbors,
+            tried
         ));
     }
     
@@ -141,6 +154,7 @@ public class WFCLattice {
         
         // Restore the node's previous state
         node.setModulesContainer(null);
+        alternatives.put(node.getCellLocation(), new Alternatives(decisionStack.peek(), decision.triedModules));
         node.updatePossibleStates();
 
         // Recalculate entropy for affected neighbors
@@ -157,7 +171,9 @@ public class WFCLattice {
         // updateNodeEntropy() calls updatePossibleStates(), which reassigns the option set and
         // would wipe this exclusion, letting the same dead-end module be picked again.
         if (node.getValidOptions() != null) {
-            node.getValidOptions().remove(decision.chosenModule);
+            entropyQueue.remove(node);
+            node.getValidOptions().removeAll(decision.triedModules);
+            entropyQueue.add(node);
         }
 
         return true;
@@ -175,6 +191,7 @@ public class WFCLattice {
      */
     public void clearBacktrackHistory() {
         decisionStack.clear();
+        alternatives.clear();
     }
 
     public void clearAllData() {

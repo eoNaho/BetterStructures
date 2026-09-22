@@ -164,6 +164,10 @@ public class ModulesConfigFields extends CustomConfigFields {
         this.enforceVerticalRotation = processBoolean("enforceVerticalRotation", enforceVerticalRotation, enforceVerticalRotation, true);
         this.noRepeat = processBoolean("noRepeat", noRepeat, noRepeat, true);
         this.weight = processDouble("weight", weight, weight, true);
+        if (!Double.isFinite(weight) || weight < 0) {
+            Logger.warn("Invalid weight in " + filename + "; expected a finite nonnegative number. Disabling selection.");
+            weight = 0;
+        }
         this.repetitionPenalty = processDouble("repetitionPenalty", repetitionPenalty, repetitionPenalty, true);
         this.enforceHorizontalRotation = processBoolean("enforceHorizontalRotation", enforceHorizontalRotation, enforceHorizontalRotation, true);
         this.northIsPassable = processBoolean("northIsPassable", northIsPassable, northIsPassable, true);
@@ -183,6 +187,25 @@ public class ModulesConfigFields extends CustomConfigFields {
         this.cloneConfig = processString("cloneConfig", cloneConfig, cloneConfig, true);
         this.compoundModule = processString("compoundModule", compoundModule, compoundModule, true);
         this.isAutomaticallyPlaced = processBoolean("isAutomaticallyPlaced", isAutomaticallyPlaced, isAutomaticallyPlaced, true);
+    }
+
+    static void validateCloneGraph(java.util.Collection<ModulesConfigFields> configurations) {
+        java.util.Set<ModulesConfigFields> resolved = new java.util.HashSet<>();
+        for (ModulesConfigFields configuration : configurations) {
+            java.util.Set<ModulesConfigFields> active = new java.util.LinkedHashSet<>();
+            ModulesConfigFields cursor = configuration;
+            while (cursor != null && !resolved.contains(cursor)) {
+                if (!active.add(cursor)) {
+                    String chain = active.stream().map(ModulesConfigFields::getFilename)
+                            .collect(java.util.stream.Collectors.joining(" -> "));
+                    throw new IllegalStateException("Cyclic module clone configuration: " + chain
+                            + " -> " + cursor.getFilename());
+                }
+                cursor = cursor.cloneConfig.isEmpty() ? null
+                        : ModulesConfig.getModuleConfiguration(cursor.cloneConfig);
+            }
+            resolved.addAll(active);
+        }
     }
 
     public void validateClones() {

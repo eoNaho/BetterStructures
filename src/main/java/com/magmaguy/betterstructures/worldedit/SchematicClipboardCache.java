@@ -57,17 +57,14 @@ public final class SchematicClipboardCache {
     public Clipboard get(File schematicFile) {
         Entry entry = entries.get(pathKey(schematicFile));
         if (entry == null) return null;
-        Identity identity = identify(schematicFile);
+        SchematicDiskCache.SourceIdentity identity = identify(schematicFile);
         if (identity == null || !identity.equals(entry.identity())) return null;
         return entry.clipboard();
     }
 
-    public void put(File schematicFile, Clipboard clipboard) {
-        Identity identity = identify(schematicFile);
-        //A file that cannot be stated now cannot be proven unchanged later, so it is simply never
-        //cached rather than cached under an identity that can never match.
-        if (identity == null) return;
-        entries.put(pathKey(schematicFile), new Entry(identity, clipboard));
+    public void put(File schematicFile, SchematicDiskCache.LoadedClipboard loaded) {
+        if (loaded == null || loaded.clipboard() == null || loaded.identity() == null) return;
+        entries.put(pathKey(schematicFile), new Entry(loaded.identity(), loaded.clipboard()));
     }
 
     /**
@@ -99,12 +96,12 @@ public final class SchematicClipboardCache {
     /**
      * @return the file's size, modification time, and content digest, or null if it could not be read
      */
-    private static Identity identify(File schematicFile) {
+    private static SchematicDiskCache.SourceIdentity identify(File schematicFile) {
         try {
             BasicFileAttributes attributes = Files.readAttributes(
                     schematicFile.toPath(),
                     BasicFileAttributes.class);
-            return new Identity(
+            return new SchematicDiskCache.SourceIdentity(
                     attributes.size(),
                     attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS),
                     sha256(schematicFile));
@@ -125,9 +122,6 @@ public final class SchematicClipboardCache {
         return HexFormat.of().formatHex(digest.digest());
     }
 
-    private record Identity(long size, long lastModifiedNanos, String sha256) {
-    }
-
-    private record Entry(Identity identity, Clipboard clipboard) {
+    private record Entry(SchematicDiskCache.SourceIdentity identity, Clipboard clipboard) {
     }
 }

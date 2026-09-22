@@ -3,8 +3,6 @@ package com.magmaguy.betterstructures.content;
 import com.magmaguy.betterstructures.MetadataHandler;
 import com.magmaguy.betterstructures.commands.ReloadCommand;
 import com.magmaguy.betterstructures.config.contentpackages.ContentPackageConfigFields;
-import com.magmaguy.betterstructures.config.schematics.SchematicConfig;
-import com.magmaguy.betterstructures.config.schematics.SchematicConfigField;
 import com.magmaguy.magmacore.nightbreak.AbstractNightbreakContentPackage;
 import com.magmaguy.magmacore.util.Logger;
 import lombok.Getter;
@@ -73,18 +71,6 @@ public class BSPackage extends AbstractNightbreakContentPackage {
     }
 
     private CompletableFuture<Void> toggleContentState(boolean enabled) {
-        if (contentPackageConfigFields.getContentPackageType() != ContentPackageConfigFields.ContentPackageType.MODULAR) {
-            File folder = getSpecificContentFolder();
-            File[] files = folder.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (!file.getName().endsWith(".yml")) continue;
-                    SchematicConfigField schematicConfigField = SchematicConfig.getSchematicConfiguration(file.getName());
-                    if (schematicConfigField != null) schematicConfigField.toggleEnabled(enabled);
-                }
-            }
-        }
-
         return contentPackageConfigFields.setEnabledAndSave(enabled);
     }
 
