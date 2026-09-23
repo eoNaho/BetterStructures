@@ -107,7 +107,8 @@ public class Schematic {
 
         ClipboardFormat format = ClipboardFormats.findByFile(schematicFile);
 
-        try (ClipboardReader reader = format.getReader(new FileInputStream(schematicFile))) {
+        try (FileInputStream input = new FileInputStream(schematicFile);
+             ClipboardReader reader = format.getReader(input)) {
             clipboard = reader.read();
         } catch (IOException e) {
             e.printStackTrace();
