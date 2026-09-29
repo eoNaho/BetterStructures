@@ -65,7 +65,7 @@ public final class ModulePasting {
     private final Location startLocation;
     private final boolean createModularWorld;
     private final List<NbtPlacement> nbtToPlace = new ArrayList<>();
-    private record PreparedState(Material material, BlockData blockData) { }
+    private record PreparedState(BlockData blockData) { }
     private final Map<BlockState, PreparedState> preparedStates = new java.util.LinkedHashMap<>(128, .75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<BlockState, PreparedState> eldest) {
             return size() > 4096;
@@ -206,19 +206,11 @@ public final class ModulePasting {
     private Pasteable prepareBlock(BaseBlock baseBlock, Location pasteLocation,
                                    ModulesConfigFields modulesConfigFields, boolean collect) {
         BlockState blockState = baseBlock.toImmutableState();
-        // Air must still be pasted when generating into an existing world, as it is what
-        // carves the walkable interiors out of the terrain. Only void worlds can skip it.
-        if (createModularWorld && WorldEditUtils.isAir(blockState)) return null;
-
         PreparedState prepared = preparedStates.computeIfAbsent(blockState, state -> {
             Material material = WorldEditUtils.adaptMaterial(state);
-            return new PreparedState(material, material == null || material == Material.BARRIER
+            return new PreparedState(material == null
                     ? null : WorldEditUtils.createBlockDataOrNull(baseBlock));
         });
-        Material material = prepared.material();
-
-        // Skip barriers
-        if (material == Material.BARRIER) return null;
 
         BlockData blockData = prepared.blockData();
         if (blockData == null) {
@@ -296,6 +288,12 @@ public final class ModulePasting {
 
     private record ModuleInput(Clipboard clipboard, Location location, int rotation, ModulesConfigFields config) { }
 
+    static boolean skipCell(BlockState state, boolean voidWorld) {
+        // Existing worlds need air placements to carve interiors; void worlds already contain air.
+        return state.getBlockType().id().equals("minecraft:barrier")
+                || voidWorld && state.getBlockType().getMaterial().isAir();
+    }
+
     /** One block or post-processing entry per queue step. No complete transformed clipboard is materialized. */
     private final class ModularPaste implements com.magmaguy.betterstructures.worldedit.Schematic.PasteOperation {
         private final List<ModuleInput> inputs;
@@ -306,13 +304,16 @@ public final class ModulePasting {
         private AffineTransform transform;
         private BlockVector3 minimum;
         private com.sk89q.worldedit.extent.transform.BlockTransformExtent blocks;
-        private java.util.Iterator<BlockVector3> cursor;
+        private ModularPasteCursor cursor;
         private java.util.Iterator<? extends com.sk89q.worldedit.entity.Entity> entityCursor;
         private BlockVector3 nextBlock;
+        private BaseBlock nextBlockData;
+        private boolean skipNextBlock;
         private com.sk89q.worldedit.entity.Entity nextEntity;
         private Location nextLocation;
         private final Map<String, ChestContents> barrelContents = new HashMap<>();
         private boolean closed;
+        private boolean cancelled;
 
         private ModularPaste(List<ModuleInput> inputs) { this.inputs = inputs; }
         public boolean hasNext() { return !closed && phase < 8; }
@@ -320,14 +321,10 @@ public final class ModulePasting {
         private void selectModule() {
             module = inputs.get(moduleIndex);
             transform = new AffineTransform().rotateY(normalizeRotation(module.rotation()));
-            BlockVector3 low = module.clipboard().getMinimumPoint(), high = module.clipboard().getMaximumPoint();
-            minimum = transform.apply(low.toVector3()).toBlockPoint();
-            for (int x : new int[]{low.x(), high.x()})
-                for (int y : new int[]{low.y(), high.y()})
-                    for (int z : new int[]{low.z(), high.z()})
-                        minimum = minimum.getMinimum(transform.apply(BlockVector3.at(x, y, z).toVector3()).toBlockPoint());
+            cursor = new ModularPasteCursor(module.clipboard().getMinimumPoint(), module.clipboard().getMaximumPoint(),
+                    transform, module.location().getBlockX(), module.location().getBlockZ());
+            minimum = cursor.transformedMinimum();
             blocks = new com.sk89q.worldedit.extent.transform.BlockTransformExtent(module.clipboard(), transform);
-            cursor = module.clipboard().getRegion().iterator();
             entityCursor = module.clipboard().getEntities().iterator();
         }
 
@@ -337,13 +334,24 @@ public final class ModulePasting {
         }
 
         public boolean ready() {
-            if (Bukkit.getWorld(world.getUID()) != world) throw new IllegalStateException("Paste world was unloaded");
+            if (Bukkit.getWorld(world.getUID()) != world) {
+                // The owning instance may be cancelled while its blocks are still queued.
+                cancelled = true;
+                close();
+                return true;
+            }
             if (phase < 2 || phase == 5) {
                 if (moduleIndex >= inputs.size()) return true;
                 if (module == null) return true;
                 if (phase < 2) {
-                    if (nextBlock == null && cursor.hasNext()) nextBlock = cursor.next();
+                    if (nextBlock == null && cursor.hasNext()) {
+                        nextBlock = cursor.next();
+                        nextBlockData = blocks.getFullBlock(nextBlock);
+                        skipNextBlock = skipCell(nextBlockData.toImmutableState(), createModularWorld);
+                    }
                     if (nextBlock == null) return true;
+                    // Consume skipped cells through pasteNext too: ready must never scan unbounded air.
+                    if (skipNextBlock) return true;
                     nextLocation = target(nextBlock.toVector3());
                 } else {
                     if (nextEntity == null && entityCursor.hasNext()) nextEntity = entityCursor.next();
@@ -364,13 +372,17 @@ public final class ModulePasting {
         }
 
         public void pasteNext() {
+            if (closed) return;
             if (phase < 2 || phase == 5) {
                 if (moduleIndex >= inputs.size()) { advance(); return; }
                 if (module == null) { selectModule(); return; }
                 if (phase < 2) {
                     if (nextBlock == null) { moduleIndex++; module = null; return; }
-                    Pasteable block = prepareBlock(blocks.getFullBlock(nextBlock), nextLocation, module.config(), phase == 0);
                     nextBlock = null;
+                    BaseBlock data = nextBlockData;
+                    nextBlockData = null;
+                    if (skipNextBlock) return;
+                    Pasteable block = prepareBlock(data, nextLocation, module.config(), phase == 0);
                     if (block == null) return;
                     boolean fast = createModularWorld && block.blockData().getLightEmission() == 0
                             && !(block.blockData() instanceof Directional) && !(block.blockData() instanceof Rail)
@@ -455,10 +467,10 @@ public final class ModulePasting {
         }
 
         private void advance() {
-            phase++; moduleIndex = 0; postIndex = 0; module = null; nextBlock = null; nextEntity = null; nextLocation = null;
+            phase++; moduleIndex = 0; postIndex = 0; module = null; nextBlock = null; nextBlockData = null; nextEntity = null; nextLocation = null;
         }
         public void onComplete() {
-            if (createModularWorld) {
+            if (!cancelled && Bukkit.getWorld(world.getUID()) == world && createModularWorld) {
                 if (modularWorld == null) modularWorld = new ModularWorld(world, worldFolder, List.of());
                 modularWorld.generationFinished();
             }
@@ -467,7 +479,7 @@ public final class ModulePasting {
             closed = true; chunks.close(); inputs.clear();
             preparedStates.clear();
             nbtToPlace.clear(); chestsToPlace.clear(); barrelsToFill.clear(); entitiesToSpawn.clear(); interpretedSigns.clear();
-            module = null; cursor = null; entityCursor = null; nextBlock = null; nextEntity = null;
+            module = null; cursor = null; entityCursor = null; nextBlock = null; nextBlockData = null; nextEntity = null;
         }
     }
 

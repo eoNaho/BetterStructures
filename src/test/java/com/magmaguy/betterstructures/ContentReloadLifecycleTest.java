@@ -20,6 +20,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -92,7 +94,7 @@ class ContentReloadLifecycleTest {
         plugin.reloadImportedContent(server.getConsoleSender());
 
         releaseWorker.countDown();
-        finishScheduledWork();
+        finishScheduledWork(() -> loads.get() == 2 && !BetterStructures.isReloading());
 
         assertEquals(2, loads.get());
         assertFalse(BetterStructures.isReloading());
@@ -132,18 +134,22 @@ class ContentReloadLifecycleTest {
         doThrow(new IllegalStateException("Fixture content failure")).when(plugin).loadContent(any());
 
         plugin.reloadImportedContent(null);
-        finishScheduledWork();
+        finishScheduledWork(() -> !plugin.isEnabled());
 
         assertFalse(plugin.isEnabled());
         assertFalse(BetterStructures.isReloading());
         assertEquals(PluginInitializationState.UNINITIALIZED, MagmaCore.getInitializationState(plugin.getName()));
     }
 
-    private void finishScheduledWork() {
-        for (int i = 0; i < 6; i++) {
+    private void finishScheduledWork(BooleanSupplier completed) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!completed.getAsBoolean() && System.nanoTime() < deadline) {
             server.getScheduler().performOneTick();
-            server.getScheduler().waitAsyncTasksFinished();
+            // The managed completion callback can schedule its successor after an executor snapshot.
+            // Wait for the real lifecycle outcome; MockBukkit's wait helper cancels repeating work.
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
         }
+        assertTrue(completed.getAsBoolean(), "The managed content reload did not reach its terminal state");
     }
 
     private static void set(Class<?> type, Object target, String name, Object value) throws Exception {

@@ -38,7 +38,7 @@ dependencies {
     compileOnly group: 'io.lumine', name: 'MythicLib-dist', version: '1.5.2-SNAPSHOT'
     compileOnly group: 'net.Indyuce', name: 'MMOItems-API', version: '6.9.2-SNAPSHOT'
     compileOnly group: 'com.sk89q.worldguard', name: 'worldguard-bukkit', version: '7.0.7'
-    compileOnly group: 'com.sk89q.worldedit', name: 'worldedit-bukkit', version: '7.3.0'
+    compileOnly 'com.sk89q.worldedit:worldedit-bukkit:7.4.2'
     compileOnly 'org.spigotmc:spigot-api:26.3-R0.1-SNAPSHOT'
     //The server's logging backend, used only to collapse the per-block conversion errors Mojang's
     //data converter emits while reading schematics (see SchematicConversionLog). compileOnly: the
@@ -51,8 +51,26 @@ dependencies {
     testImplementation 'org.mockbukkit.mockbukkit:mockbukkit-v26.2:4.116.1'
     testImplementation 'io.papermc.paper:paper-api:26.2.build.111-stable'
     // The cache ticket test exercises the production Clipboard seam without starting Bukkit.
-    testImplementation group: 'com.sk89q.worldedit', name: 'worldedit-core', version: '7.3.0'
+    testImplementation 'com.sk89q.worldedit:worldedit-core:7.4.2'
+    testImplementation 'com.sk89q.worldedit:worldedit-bukkit:7.4.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Bukkit/Paper supplies these libraries. WorldEdit's strict pins describe its server baseline,
+    // which differs from the selected API version; retain the server's dependency declarations.
+    components {
+        ['worldedit-core', 'worldedit-bukkit'].each { module ->
+            withModule("com.sk89q.worldedit:${module}") {
+                allVariants {
+                    withDependencyConstraints {
+                        removeAll { it.group in ['com.google.guava', 'com.google.code.gson'] }
+                    }
+                    withDependencies {
+                        removeAll { it.group in ['com.google.guava', 'com.google.code.gson'] }
+                    }
+                }
+            }
+        }
+    }
 }
 
 //This allows any modules tagged as changing to be updated every time, which is extremely convenient for some of the shaded libs
