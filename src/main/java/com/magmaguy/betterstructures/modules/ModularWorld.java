@@ -80,10 +80,7 @@ public class ModularWorld {
     void addSign(ModulePasting.InterpretedSign interpretedSign) {
         for (String signText : interpretedSign.text()) {
             if (signText.contains("[spawn]"))
-                spawnLocations.add(new Location(world,
-                        (int) interpretedSign.location().getX(),
-                        (int) interpretedSign.location().getY(),
-                        (int) interpretedSign.location().getZ()));
+                spawnLocations.add(ModulePasting.entitySpawnLocation(interpretedSign.location()));
             else if (signText.contains("[exit]")) {
                 processExitLocations(interpretedSign);
             } else if (signText.contains("[chest]")) {
@@ -238,11 +235,12 @@ public class ModularWorld {
                     Logger.warn("Spawn pool " + parsedString + " references missing boss " + bossFilename);
                     continue;
                 }
+                Location spawnLocation = ModulePasting.entitySpawnLocation(otherLocation.location());
                 if (!customBossesConfigFields.isInstanced()) {
                     CustomBossEntity customBossEntity = new CustomBossEntity(customBossesConfigFields);
-                    customBossEntity.spawn(otherLocation.location(), true);
+                    customBossEntity.spawn(spawnLocation, true);
                 } else {
-                    scheduledInstancedEntities.add(new ScheduledInstancedEntity(otherLocation.location(), customBossesConfigFields,
+                    scheduledInstancedEntities.add(new ScheduledInstancedEntity(spawnLocation, customBossesConfigFields,
                             parsedString, spawnPoolsConfigFields.getMaxLevel()));
                 }
             }

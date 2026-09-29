@@ -15,6 +15,8 @@ import org.bukkit.Material;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.entity.EntityType;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.joml.Vector3i;
 import org.junit.jupiter.api.AfterEach;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.world.ChunkMock;
@@ -165,6 +168,34 @@ class ModularPastingTest {
         assertEquals(size, generated.getHorizontalSize());
     }
 
+    @ParameterizedTest(name = "{displayName} rotation={0}")
+    @ValueSource(ints = {0, 90, 180, 270})
+    void markerSpawnKeepsItsFeetAtAuthoredHeightAndItsBodyClearOfAnAdjacentWall(int rotation) {
+        Location marker = new Location(world, -120, 70, 41);
+        world.getBlockAt(-121, 70, 41).setType(Material.STONE);
+        world.getBlockAt(-121, 71, 41).setType(Material.STONE);
+        BaseBlock sign = block("oak_sign", false);
+        when(sign.getNbtData()).thenReturn(new com.sk89q.jnbt.CompoundTag(Map.of(
+                "Text1", new com.sk89q.jnbt.StringTag("{\"text\":\"[spawn]\"}"),
+                "Text2", new com.sk89q.jnbt.StringTag("{\"text\":\"VINDICATOR\"}"),
+                "Text3", new com.sk89q.jnbt.StringTag("{\"text\":\"\"}"),
+                "Text4", new com.sk89q.jnbt.StringTag("{\"text\":\"\"}"))));
+        enqueue(false, marker, rotation, BlockVector3.ZERO, BlockVector3.ZERO, Map.of(BlockVector3.ZERO, sign));
+
+        drain();
+
+        var entities = world.getEntities().stream().filter(entity -> entity.getType() == EntityType.VINDICATOR).toList();
+        assertEquals(1, entities.size());
+        var entity = entities.getFirst();
+        assertEquals(new Location(world, -119.5, 70, 41.5), entity.getLocation());
+        BoundingBox wall = new BoundingBox(-121, 70, 41, -120, 72, 42);
+        assertFalse(entity.getBoundingBox().overlaps(wall), "The real entity bounding box must clear the adjacent solid wall");
+        assertTrue(entity.getBoundingBox().clone().shift(-.5, 0, -.5).overlaps(wall),
+                "The original block-corner spawn intersects this same wall");
+        assertEquals(Material.AIR, marker.getBlock().getType());
+        assertTrue(warnings.isEmpty(), () -> "Unexpected paste warnings: " + warnings);
+    }
+
     private void enqueue(boolean generatedWorld, Location origin, int rotation, BlockVector3 low, BlockVector3 high,
                          Map<BlockVector3, BaseBlock> source) {
         enqueue(generatedWorld, origin, rotation, low, high, source, 2, 16);
@@ -234,6 +265,15 @@ class ModularPastingTest {
 
     private static final class CountingWorld extends WorldMock {
         private final List<String> requestedChunks = new ArrayList<>();
+
+        @Override public org.bukkit.entity.Entity spawnEntity(Location location, EntityType type) {
+            var entity = super.spawnEntity(location, type);
+            if (!(entity instanceof org.bukkit.entity.LivingEntity living)) return entity;
+            // MockBukkit supports the real entity geometry but omits this despawn-policy setter.
+            var supported = spy(living);
+            doNothing().when(supported).setRemoveWhenFarAway(false);
+            return supported;
+        }
 
         @Override public boolean isChunkLoaded(int x, int z) {
             requestedChunks.add(x + "," + z);

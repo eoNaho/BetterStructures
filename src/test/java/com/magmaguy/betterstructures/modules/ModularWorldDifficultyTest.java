@@ -114,7 +114,7 @@ class ModularWorldDifficultyTest {
 
             assertEquals(3, spawned.size());
             for (int index = 0; index < spawned.size(); index++) {
-                assertEquals(List.of(boss, positions.get(index), 40, Integer.toString(index)), constructorArguments.get(index));
+                assertEquals(List.of(boss, positions.get(index).clone().add(.5, 0, .5), 40, Integer.toString(index)), constructorArguments.get(index));
                 verify(spawned.get(index)).spawn(true);
                 verify(spawned.get(index)).addCustomData(new NamespacedKey("betterstructures", "spawnpool"), poolId);
             }
@@ -126,5 +126,42 @@ class ModularWorldDifficultyTest {
             if (previousBoss == null) bosses.remove(bossId);
             else bosses.put(bossId, previousBoss);
         }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void immediatePoolSpawnsUseTheBlockCenterWithoutMovingTheAuthoredMarker() {
+        String poolId = "center_fixture.yml", bossId = "center_boss.yml";
+        SpawnPoolsConfigFields pool = mock(SpawnPoolsConfigFields.class);
+        when(pool.getPoolStrings()).thenReturn(List.of(bossId));
+        CustomBossesConfigFields boss = new CustomBossesConfigFields(bossId, EntityType.VINDICATOR, true, "Fixture", "7");
+        Map<String, CustomBossesConfigFields> bosses = (Map<String, CustomBossesConfigFields>) CustomBossesConfig.getCustomBosses();
+        SpawnPoolsConfigFields previousPool = SpawnPoolsConfig.getSpawnPoolConfigFields().put(poolId, pool);
+        CustomBossesConfigFields previousBoss = bosses.put(bossId, boss);
+        Location marker = new Location(world, -120, 16, 41);
+        ModularWorld generated = new ModularWorld(world, folder.toFile(), List.of(), new Location(world, 0, 16, 0), 384);
+        try (var captured = mockConstruction(com.magmaguy.elitemobs.mobconstructor.custombosses.CustomBossEntity.class)) {
+            generated.spawnOtherEntitiesAt(new ModulePasting.InterpretedSign(marker, List.of("[pool:center_fixture]")));
+            verify(captured.constructed().getFirst()).spawn(new Location(world, -119.5, 16, 41.5), true);
+            assertEquals(new Location(world, -120, 16, 41), marker);
+        } finally {
+            if (previousPool == null) SpawnPoolsConfig.getSpawnPoolConfigFields().remove(poolId);
+            else SpawnPoolsConfig.getSpawnPoolConfigFields().put(poolId, previousPool);
+            if (previousBoss == null) bosses.remove(bossId);
+            else bosses.put(bossId, previousBoss);
+        }
+    }
+
+    @Test
+    void playerSpawnsAreCenteredWhileContainerMarkersRemainBlockCoordinates() {
+        Location marker = new Location(world, -120, 16, 41);
+        ModularWorld generated = new ModularWorld(world, folder.toFile(), List.of(
+                new ModulePasting.InterpretedSign(marker, List.of("[spawn]", "[chest]", "[barrel]"))),
+                new Location(world, 0, 16, 0), 384);
+
+        assertEquals(List.of(new Location(world, -119.5, 16, 41.5)), generated.getSpawnLocations());
+        assertEquals(List.of(marker), generated.getChestLocations());
+        assertEquals(List.of(marker), generated.getBarrelLocations());
+        assertEquals(new Location(world, -120, 16, 41), marker);
     }
 }

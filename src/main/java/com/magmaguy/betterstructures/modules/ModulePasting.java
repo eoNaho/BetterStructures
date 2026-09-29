@@ -228,7 +228,7 @@ public final class ModulePasting {
                 if (line.contains("[spawn]") && lines.size() > 1) {
                     try {
                         EntityType entityType = EntityType.valueOf(lines.get(1).toUpperCase());
-                        entitiesToSpawn.add(new EntitySpawn(pasteLocation, entityType));
+                        entitiesToSpawn.add(new EntitySpawn(entitySpawnLocation(pasteLocation), entityType));
                     } catch (Exception e) {
                         Logger.warn("Invalid entity type in sign: " + lines.get(1));
                     }
@@ -504,6 +504,11 @@ public final class ModulePasting {
     }
 
     public record InterpretedSign(Location location, List<String> text) {
+    }
+
+    static Location entitySpawnLocation(Location marker) {
+        // Marker coordinates address a block; entity centers must clear the neighboring blocks.
+        return marker.clone().add(.5, 0, .5);
     }
 
     private record Pasteable(Location location, BlockData blockData) {
