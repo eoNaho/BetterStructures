@@ -9,10 +9,10 @@ public class DungeoneeringModuleGeneratorConfig extends ModuleGeneratorsConfigFi
 
     public DungeoneeringModuleGeneratorConfig() {
         super("dungeoneering_module_generator");
-        radius = 5;
+        radius = 4;
         edges = true;
         minChunkY = -2;
-        maxChunkY = 2;
+        maxChunkY = 1;
         moduleSizeXZ = 32;
         moduleSizeY = 16;
         debug = false;
