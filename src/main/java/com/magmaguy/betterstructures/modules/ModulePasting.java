@@ -442,7 +442,7 @@ public final class ModulePasting {
                 }
                 case 7 -> {
                     if (!createModularWorld || postIndex >= interpretedSigns.size()) { advance(); return; }
-                    if (modularWorld == null) modularWorld = new ModularWorld(world, worldFolder, List.of());
+                    if (modularWorld == null) modularWorld = createWorld();
                     InterpretedSign sign = interpretedSigns.get(postIndex++);
                     modularWorld.addSign(sign);
                     modularWorld.spawnOtherEntitiesAt(sign);
@@ -471,9 +471,17 @@ public final class ModulePasting {
         }
         public void onComplete() {
             if (!cancelled && Bukkit.getWorld(world.getUID()) == world && createModularWorld) {
-                if (modularWorld == null) modularWorld = new ModularWorld(world, worldFolder, List.of());
+                if (modularWorld == null) modularWorld = createWorld();
                 modularWorld.generationFinished();
             }
+        }
+        private ModularWorld createWorld() {
+            int moduleSize = moduleGeneratorsConfigFields.getModuleSizeXZ();
+            // The lattice's half-module integer offset leaves odd-width modules centered on half blocks.
+            Location center = new Location(world, startLocation.getBlockX() + (moduleSize % 2) * .5,
+                    startLocation.getBlockY(), startLocation.getBlockZ() + (moduleSize % 2) * .5);
+            double size = (2D * moduleGeneratorsConfigFields.getRadius() - 1) * moduleSize;
+            return new ModularWorld(world, worldFolder, List.of(), center, size);
         }
         public void close() {
             closed = true; chunks.close(); inputs.clear();

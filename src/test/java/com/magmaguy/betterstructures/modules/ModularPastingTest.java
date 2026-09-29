@@ -133,6 +133,8 @@ class ModularPastingTest {
         assertEquals(List.of("2,0"), world.requestedChunks, "Empty and barrier-only chunks must not be requested");
         assertEquals(1, completions.size());
         assertSame(world, completions.getFirst().getModularWorld().getWorld());
+        assertEquals(new Location(world, 8, 62, 8), completions.getFirst().getModularWorld().getCenter());
+        assertEquals(48D, completions.getFirst().getModularWorld().getHorizontalSize());
         assertTrue(warnings.isEmpty(), () -> "Unexpected paste warnings: " + warnings);
     }
 
@@ -149,8 +151,27 @@ class ModularPastingTest {
         assertTrue(world.requestedChunks.isEmpty());
     }
 
+    @ParameterizedTest(name = "{displayName} moduleWidth={0}")
+    @CsvSource({"32,-2,47,160", "33,-1.5,47.5,165"})
+    void completionRetainsTheTranslatedGeneratorGeometry(int moduleWidth, double centerX, double centerZ, double size) {
+        enqueue(true, new Location(world, -17.8, 70.4, 31.75), 0, BlockVector3.ZERO, BlockVector3.ZERO,
+                Map.of(BlockVector3.ZERO, block("glowstone", false)), 3, moduleWidth);
+
+        drain();
+
+        assertEquals(1, completions.size());
+        ModularWorld generated = completions.getFirst().getModularWorld();
+        assertEquals(new Location(world, centerX, 62, centerZ), generated.getCenter());
+        assertEquals(size, generated.getHorizontalSize());
+    }
+
     private void enqueue(boolean generatedWorld, Location origin, int rotation, BlockVector3 low, BlockVector3 high,
                          Map<BlockVector3, BaseBlock> source) {
+        enqueue(generatedWorld, origin, rotation, low, high, source, 2, 16);
+    }
+
+    private void enqueue(boolean generatedWorld, Location origin, int rotation, BlockVector3 low, BlockVector3 high,
+                         Map<BlockVector3, BaseBlock> source, int radius, int moduleSize) {
         Clipboard clipboard = mock(Clipboard.class);
         when(clipboard.getMinimumPoint()).thenReturn(low);
         when(clipboard.getMaximumPoint()).thenReturn(high);
@@ -163,16 +184,18 @@ class ModularPastingTest {
         });
         ModuleGeneratorsConfigFields config = mock(ModuleGeneratorsConfigFields.class);
         when(config.isWorldGeneration()).thenReturn(generatedWorld);
+        when(config.getRadius()).thenReturn(radius);
+        when(config.getModuleSizeXZ()).thenReturn(moduleSize);
         WFCGenerator generator = mock(WFCGenerator.class);
         when(generator.getModuleGeneratorsConfigFields()).thenReturn(config);
         ModulesContainer module = mock(ModulesContainer.class);
         when(module.getClipboard()).thenReturn(clipboard);
         when(module.getRotation()).thenReturn(rotation);
-        WFCLattice lattice = new WFCLattice(2, 16, 16, 0, 0);
+        WFCLattice lattice = new WFCLattice(radius, moduleSize, 16, 0, 0);
         WFCNode node = new WFCNode(new Vector3i(), world, lattice, new HashMap<>(), generator);
         node.setModulesContainer(module);
         // Lattice origin cells begin half a module west/north and half a module above the generator origin.
-        Location generatorOrigin = origin.clone().add(8, -8, 8);
+        Location generatorOrigin = origin.clone().add(moduleSize / 2, -8, moduleSize / 2);
         new ModulePasting(world, folder.toFile(), new ArrayDeque<>(List.of(node)), "", generatorOrigin, config);
     }
 

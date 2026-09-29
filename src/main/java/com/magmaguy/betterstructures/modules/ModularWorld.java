@@ -19,12 +19,12 @@ import lombok.Getter;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.joml.Vector2i;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -45,12 +45,36 @@ public class ModularWorld {
     @Getter
     private final File worldFolder;
     @Getter
-    private World world = null;
+    private final World world;
+    private final Location center;
+    @Getter
+    private final double horizontalSize;
 
-    public ModularWorld(World world, File worldFolder, List<ModulePasting.InterpretedSign> interpretedSigns) {
-        this.world = world;
+    public ModularWorld(World world, File worldFolder, List<ModulePasting.InterpretedSign> interpretedSigns,
+                        Location center, double horizontalSize) {
+        this.world = Objects.requireNonNull(world, "world");
+        Objects.requireNonNull(center, "center");
+        if (!world.equals(center.getWorld()) || !Double.isFinite(center.getX()) || !Double.isFinite(center.getY())
+                || !Double.isFinite(center.getZ())) throw new IllegalArgumentException("The center must be a finite location in the modular world");
+        if (!Double.isFinite(horizontalSize) || horizontalSize <= 0)
+            throw new IllegalArgumentException("The modular world's horizontal size must be positive and finite");
+        this.center = center.clone();
+        this.horizontalSize = horizontalSize;
         this.worldFolder = worldFolder;
         interpretedSigns.forEach(this::addSign);
+    }
+
+    public Location getCenter() { return center.clone(); }
+
+    /** Square bands share the generated footprint; exact boundaries belong to the less difficult band. */
+    public String getDifficultyId(Location location) {
+        Objects.requireNonNull(location, "location");
+        if (!world.equals(location.getWorld()) || !Double.isFinite(location.getX()) || !Double.isFinite(location.getZ()))
+            throw new IllegalArgumentException("Difficulty requires a finite location in the modular world");
+        double distance = Math.max(Math.abs(location.getX() - center.getX()), Math.abs(location.getZ() - center.getZ()));
+        if (distance < horizontalSize / 6) return "2";
+        if (distance < horizontalSize / 3) return "1";
+        return "0";
     }
 
     void addSign(ModulePasting.InterpretedSign interpretedSign) {
@@ -218,7 +242,8 @@ public class ModularWorld {
                     CustomBossEntity customBossEntity = new CustomBossEntity(customBossesConfigFields);
                     customBossEntity.spawn(otherLocation.location(), true);
                 } else {
-                    scheduledInstancedEntities.add(new ScheduledInstancedEntity(otherLocation.location(), customBossesConfigFields, parsedString, spawnPoolsConfigFields.getMinLevel(), spawnPoolsConfigFields.getMaxLevel()));
+                    scheduledInstancedEntities.add(new ScheduledInstancedEntity(otherLocation.location(), customBossesConfigFields,
+                            parsedString, spawnPoolsConfigFields.getMaxLevel()));
                 }
             }
         otherLocations.remove(otherLocation);
@@ -227,14 +252,8 @@ public class ModularWorld {
     public List<InstancedBossEntity> spawnInstancedEntities() {
         List<InstancedBossEntity> instancedBossEntities = new ArrayList<>();
         for (ScheduledInstancedEntity scheduledInstancedEntity : scheduledInstancedEntities) {
-            int totalRadius = 2 * 128 + 64;//todo this is just a placeholder for now that hardcodes the radius
-            Vector2i center = new Vector2i(64, 64); //todo this is just a placeholder for now that hardcodes the center
-            Vector2i entityLocation = new Vector2i(scheduledInstancedEntity.location.getBlockX(), scheduledInstancedEntity.location.getBlockZ());
-            double distance = center.distance(entityLocation);
-            double percentageDistance = distance / totalRadius;
-            int level = (int) Math.round((1.0 - percentageDistance) * scheduledInstancedEntity.maxLevel + percentageDistance * scheduledInstancedEntity.minLevel);
-
-            InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields, scheduledInstancedEntity.location, level);
+            InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields,
+                    scheduledInstancedEntity.location, scheduledInstancedEntity.level, getDifficultyId(scheduledInstancedEntity.location));
             instancedBossEntity.spawn(true);
             instancedBossEntity.addCustomData(new NamespacedKey("betterstructures", "spawnpool"), scheduledInstancedEntity.originalSpawnPool);
             instancedBossEntities.add(instancedBossEntity);
@@ -253,7 +272,6 @@ public class ModularWorld {
             Location location,
             CustomBossesConfigFields configFields,
             String originalSpawnPool,
-            int minLevel,
-            int maxLevel
+            int level
     ){}
 }
