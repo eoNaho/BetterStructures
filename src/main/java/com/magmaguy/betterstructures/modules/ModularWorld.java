@@ -13,7 +13,6 @@ import com.magmaguy.elitemobs.config.custombosses.CustomBossesConfig;
 import com.magmaguy.elitemobs.config.custombosses.CustomBossesConfigFields;
 import com.magmaguy.elitemobs.mobconstructor.custombosses.CustomBossEntity;
 import com.magmaguy.elitemobs.mobconstructor.custombosses.InstancedBossEntity;
-import com.magmaguy.magmacore.instance.MatchInstance;
 import com.magmaguy.magmacore.util.Logger;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import lombok.Getter;
@@ -225,7 +224,7 @@ public class ModularWorld {
         otherLocations.remove(otherLocation);
     }
 
-    public List<InstancedBossEntity> spawnInstancedEntities(MatchInstance matchInstance) {
+    public List<InstancedBossEntity> spawnInstancedEntities() {
         List<InstancedBossEntity> instancedBossEntities = new ArrayList<>();
         for (ScheduledInstancedEntity scheduledInstancedEntity : scheduledInstancedEntities) {
             int totalRadius = 2 * 128 + 64;//todo this is just a placeholder for now that hardcodes the radius
@@ -235,7 +234,7 @@ public class ModularWorld {
             double percentageDistance = distance / totalRadius;
             int level = (int) Math.round((1.0 - percentageDistance) * scheduledInstancedEntity.maxLevel + percentageDistance * scheduledInstancedEntity.minLevel);
 
-            InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields, scheduledInstancedEntity.location, matchInstance, level);
+            InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields, scheduledInstancedEntity.location, level);
             instancedBossEntity.spawn(true);
             instancedBossEntity.addCustomData(new NamespacedKey("betterstructures", "spawnpool"), scheduledInstancedEntity.originalSpawnPool);
             instancedBossEntities.add(instancedBossEntity);
