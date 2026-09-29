@@ -6,9 +6,11 @@ import com.magmaguy.betterstructures.util.SchematicFileUtils;
 import com.magmaguy.betterstructures.worldedit.SchematicClipboardCache;
 import com.magmaguy.betterstructures.worldedit.SchematicConversionLog;
 import com.magmaguy.betterstructures.worldedit.SchematicDiskCache;
+import com.magmaguy.magmacore.MagmaCore;
 import com.magmaguy.magmacore.config.CustomConfig;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import lombok.Getter;
+import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -26,6 +28,7 @@ public class ModulesConfig extends CustomConfig {
 
     public ModulesConfig() {
         super("modules", ModulesConfigFields.class);
+        if (shutdownRequested()) return;
         File modulesFile = new File(MetadataHandler.PLUGIN.getDataFolder().getAbsolutePath()+ File.separatorChar + "modules");
         if (!modulesFile.exists()) modulesFile.mkdir();
 
@@ -54,6 +57,7 @@ public class ModulesConfig extends CustomConfig {
                     new SchematicDiskCache(SchematicDiskCache.moduleCacheFolder());
             try (SchematicConversionLog.Session conversionLog = SchematicConversionLog.capture()) {
                 for (File file : discoveredModuleFiles) {
+                    if (shutdownRequested()) return;
                     File previous = moduleSourcesByFilename.putIfAbsent(
                             file.getName(),
                             file);
@@ -83,9 +87,11 @@ public class ModulesConfig extends CustomConfig {
                 diskCache.pruneStaleEntries(discoveredModuleFiles);
         }
 
+        if (shutdownRequested()) return;
         moduleConfigurations.clear();
         ModulesContainer.initializeSpecialModules();
         for (File file : discoveredModuleFiles) {
+            if (shutdownRequested()) return;
             String configurationName = SchematicFileUtils.convertFromSchematicFilename(file.getName());
             ModulesConfigFields moduleConfigField = new ModulesConfigFields(configurationName, true);
             new CustomConfig(file.getParent().replace(
@@ -98,6 +104,7 @@ public class ModulesConfig extends CustomConfig {
         moduleConfigurations.values().forEach(ModulesConfigFields::validateClones);
 
         for (ModulesConfigFields modulesConfigFields : moduleConfigurations.values()) {
+            if (shutdownRequested()) return;
             if (!modulesConfigFields.isEnabled()) continue;
             String schematicFilename = SchematicFileUtils.convertFromConfigurationFilename(modulesConfigFields.getFilename());
             File source = moduleSourcesByFilename.get(schematicFilename);
@@ -117,8 +124,12 @@ public class ModulesConfig extends CustomConfig {
                     modulesConfigFields.getFilename());
         }
 
-        ModulesContainer.postInitializeModulesContainer();
+        if (!shutdownRequested()) ModulesContainer.postInitializeModulesContainer();
 
+    }
+
+    private static boolean shutdownRequested() {
+        return MagmaCore.isShutdownRequested((JavaPlugin) MetadataHandler.PLUGIN);
     }
 
     public static ModulesConfigFields getModuleConfiguration(String filename) {

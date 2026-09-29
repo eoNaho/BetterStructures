@@ -129,6 +129,9 @@ public final class BetterStructures extends JavaPlugin {
                     "[BetterStructures] Timed out waiting for schematic loading to stop; "
                             + "shutdown will continue after the bounded wait.");
         }
+        // Both startup and content reload use this owner. Wait before clearing registries
+        // or returning control to Bukkit, which may close the plugin's resource jar.
+        MagmaCore.shutdown(this);
         Schematic.shutdown();
         SchematicClipboardCache.shutdown();
         SchematicContainer.shutdown();
@@ -140,11 +143,9 @@ public final class BetterStructures extends JavaPlugin {
         Bukkit.getServer().getScheduler().cancelTasks(MetadataHandler.PLUGIN);
         HandlerList.unregisterAll(MetadataHandler.PLUGIN);
         if (shutdownDuringInitialization) {
-            MagmaCore.shutdown(this);
             Bukkit.getLogger().info("[BetterStructures] Shutdown during initialization.");
             return;
         }
-        MagmaCore.shutdown(this);
         Bukkit.getLogger().info("[BetterStructures] Shutdown!");
     }
 
@@ -178,24 +179,35 @@ public final class BetterStructures extends JavaPlugin {
     private void asyncInitialization(PluginInitializationContext initializationContext) {
         initializationContext.step("Base Configs");
         new DefaultConfig();
+        loadContent(initializationContext);
+    }
 
+    void loadContent(PluginInitializationContext initializationContext) {
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Content Importer");
         ConfigurationImporter importer = MagmaCore.initializeImporter(this);
+        if (initializationContext.isShutdownRequested()) return;
         if (importer != null && importer.isEliteMobsContentImported())
             EliteMobs.reloadAfterContentImport();
 
         initializationContext.step("Treasure Config");
         new TreasureConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Generator Config");
         new GeneratorConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Module Generators");
         new ModuleGeneratorsConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Spawn Pools");
         new SpawnPoolsConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Content Packages");
         new ContentPackageConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Schematics");
         new SchematicConfig();
+        if (initializationContext.isShutdownRequested()) return;
         initializationContext.step("Modules");
         new ModulesConfig();
     }
@@ -264,8 +276,15 @@ public final class BetterStructures extends JavaPlugin {
     }
 
     public void reloadImportedContent(CommandSender commandSender) {
+        if (!isEnabled() || MagmaCore.isShutdownRequested(this)) return;
         if (!Bukkit.isPrimaryThread()) {
             Bukkit.getScheduler().runTask(this, () -> reloadImportedContent(commandSender));
+            return;
+        }
+        if (MagmaCore.getInitializationState(getName()) == PluginInitializationState.INITIALIZING
+                && !contentReloadInProgress) {
+            if (commandSender != null)
+                Logger.sendMessage(commandSender, "BetterStructures is still initializing. Try reloading when it finishes.");
             return;
         }
         if (contentReloadInProgress) {
@@ -303,31 +322,26 @@ public final class BetterStructures extends JavaPlugin {
         ModulesContainer.shutdown();
         WFCGenerator.shutdown();
 
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-            try {
-                ConfigurationImporter importer = MagmaCore.initializeImporter(this);
-                if (importer != null && importer.isEliteMobsContentImported())
-                    EliteMobs.reloadAfterContentImport();
-                new TreasureConfig();
-                new GeneratorConfig();
-                new ModuleGeneratorsConfig();
-                new SpawnPoolsConfig();
-                new ContentPackageConfig();
-                new SchematicConfig();
-                new ModulesConfig();
-                BSPackageRefresher.reset();
-                ComponentsConfigFolder.initialize();
-
-                Bukkit.getScheduler().runTask(this, () -> finishImportedContentReload(true));
-            } catch (Exception exception) {
-                Logger.warn("Failed to reload BetterStructures content asynchronously.");
-                exception.printStackTrace();
-                Bukkit.getScheduler().runTask(this, () -> finishImportedContentReload(false));
-            }
-        });
+        MagmaCore.startInitialization(this,
+                new PluginInitializationConfig("BetterStructures", "betterstructures.*", 10, List.of()),
+                this::loadContent,
+                context -> {
+                    context.step("Content Access");
+                    BSPackageRefresher.reset();
+                    context.step("Components Folder");
+                    ComponentsConfigFolder.initialize();
+                },
+                () -> finishImportedContentReload(true),
+                failure -> {
+                    Logger.warn("Failed to reload BetterStructures content asynchronously.");
+                    failure.printStackTrace();
+                    // Disabling inside the initialization callback would wait on itself.
+                    Bukkit.getScheduler().runTask(this, () -> finishImportedContentReload(false));
+                });
     }
 
     private void finishImportedContentReload(boolean successful) {
+        if (!isEnabled() || MagmaCore.isShutdownRequested(this)) return;
         String resultMessage = successful
                 ? "Reloaded BetterStructures content."
                 : "&cFailed to reload BetterStructures content. Check the console.";
