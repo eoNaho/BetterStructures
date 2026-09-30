@@ -6,8 +6,11 @@ import com.magmaguy.betterstructures.config.DefaultConfig;
 import com.magmaguy.betterstructures.chests.ChestContents;
 import com.magmaguy.betterstructures.config.modulegenerators.ModuleGeneratorsConfigFields;
 import com.magmaguy.betterstructures.config.modules.ModulesConfigFields;
+import com.magmaguy.betterstructures.config.spawnpools.SpawnPoolsConfig;
+import com.magmaguy.betterstructures.config.spawnpools.SpawnPoolsConfigFields;
 import com.magmaguy.betterstructures.config.treasures.TreasureConfig;
 import com.magmaguy.betterstructures.config.treasures.TreasureConfigFields;
+import com.magmaguy.betterstructures.thirdparty.EliteMobs;
 import com.magmaguy.betterstructures.util.WorldEditUtils;
 import com.magmaguy.easyminecraftgoals.NMSManager;
 import com.magmaguy.magmacore.util.Logger;
@@ -72,12 +75,14 @@ public final class ModulePasting {
         }
     };
     private ModularWorld modularWorld;
+    private boolean missingEliteMobsWarned;
     private final World world;
     private final File worldFolder;
     private final ModuleGeneratorsConfigFields moduleGeneratorsConfigFields;
 
     public ModulePasting(World world, File worldFolder, Deque<WFCNode> WFCNodeDeque, String spawnPoolSuffix, Location startLocation, ModuleGeneratorsConfigFields moduleGeneratorsConfigFields) {
-        this.spawnPoolSuffix = spawnPoolSuffix;
+        //Generators without spawnPoolSuffix must look up "[pool:name]" as name.yml, not namenull.yml
+        this.spawnPoolSuffix = spawnPoolSuffix == null ? "" : spawnPoolSuffix;
         this.startLocation = startLocation;
         this.world = world;
         this.worldFolder = worldFolder;
@@ -274,6 +279,55 @@ public final class ModulePasting {
         return strings;
     }
 
+    /**
+     * Modules pasted into an existing world have no ModularWorld consumer, so their boss signs spawn
+     * one-time regional bosses, the same way [elitemobs] signs do in regular structures.
+     */
+    private void spawnSignBoss(InterpretedSign sign) {
+        String bossFilename = bossFilename(sign.text());
+        if (bossFilename == null) return;
+        if (!Bukkit.getPluginManager().isPluginEnabled("EliteMobs")) {
+            if (!missingEliteMobsWarned)
+                Logger.warn("Modular structure at " + startLocation.getBlockX() + ", " + startLocation.getBlockY() + ", "
+                        + startLocation.getBlockZ() + " has EliteMobs boss signs, but EliteMobs is not enabled. Its bosses were not spawned.");
+            missingEliteMobsWarned = true;
+            return;
+        }
+        EliteMobs.Spawn(entitySpawnLocation(sign.location()), bossFilename);
+    }
+
+    /**
+     * The boss a module sign requests: "[elitemobs]" followed by the boss filename, which may be split
+     * across the remaining lines, or "[pool:name]" resolved through spawn_pools/name.yml.
+     * Null for signs that do not request a boss, or whose pool cannot supply one.
+     */
+    static String bossFilename(List<String> lines) {
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.toLowerCase(Locale.ROOT).contains("[elitemobs]")) {
+                StringBuilder filename = new StringBuilder();
+                for (String part : lines.subList(i + 1, lines.size())) filename.append(part.trim());
+                if (filename.isEmpty()) {
+                    Logger.warn("Module sign " + lines + " has no EliteMobs boss filename");
+                    return null;
+                }
+                return filename.toString();
+            }
+            String poolName = SpawnPoolsConfig.extractPoolName(line);
+            if (poolName == null) continue;
+            String poolFilename = poolName + ".yml";
+            SpawnPoolsConfigFields pool = SpawnPoolsConfig.getConfigFields(poolFilename);
+            if (pool == null) {
+                Logger.warn("Could not find spawn pool " + poolFilename);
+                return null;
+            }
+            String bossFilename = SpawnPoolsConfig.pickBossFilename(pool);
+            if (bossFilename == null) Logger.warn("Spawn pool " + poolFilename + " has no entries");
+            return bossFilename;
+        }
+        return null;
+    }
+
     private void batchPaste(Deque<WFCNode> nodes) {
         List<ModuleInput> inputs = new ArrayList<>();
         while (!nodes.isEmpty()) {
@@ -441,9 +495,13 @@ public final class ModulePasting {
                     entity.setPersistent(true);
                 }
                 case 7 -> {
-                    if (!createModularWorld || postIndex >= interpretedSigns.size()) { advance(); return; }
-                    if (modularWorld == null) modularWorld = createWorld();
+                    if (postIndex >= interpretedSigns.size()) { advance(); return; }
                     InterpretedSign sign = interpretedSigns.get(postIndex++);
+                    if (!createModularWorld) {
+                        spawnSignBoss(sign);
+                        return;
+                    }
+                    if (modularWorld == null) modularWorld = createWorld();
                     modularWorld.addSign(sign);
                     modularWorld.spawnOtherEntitiesAt(sign);
                 }

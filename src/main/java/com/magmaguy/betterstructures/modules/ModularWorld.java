@@ -25,10 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class ModularWorld {
 
@@ -98,11 +95,8 @@ public class ModularWorld {
         }
     }
 
-    private static final Pattern POOL_TEXT_PATTERN = Pattern.compile("\\[pool:\\s*([^\\]]+)\\]");
-
     public static String extractPoolText(String input) {
-        Matcher matcher = POOL_TEXT_PATTERN.matcher(input);
-        return matcher.find() ? matcher.group(1) : null;
+        return SpawnPoolsConfig.extractPoolName(input);
     }
 
     private void processExitLocations(ModulePasting.InterpretedSign interpretedSign) {
@@ -224,12 +218,11 @@ public class ModularWorld {
                     Logger.warn("Could not find spawn pool " + parsedString);
                     continue;
                 }
-                if (spawnPoolsConfigFields.getPoolStrings() == null || spawnPoolsConfigFields.getPoolStrings().isEmpty()) {
+                String bossFilename = SpawnPoolsConfig.pickBossFilename(spawnPoolsConfigFields);
+                if (bossFilename == null) {
                     Logger.warn("Spawn pool " + parsedString + " has no entries");
                     continue;
                 }
-                String bossFilename = spawnPoolsConfigFields.getPoolStrings().get(
-                        ThreadLocalRandom.current().nextInt(spawnPoolsConfigFields.getPoolStrings().size()));
                 CustomBossesConfigFields customBossesConfigFields = CustomBossesConfig.getCustomBoss(bossFilename);
                 if (customBossesConfigFields == null) {
                     Logger.warn("Spawn pool " + parsedString + " references missing boss " + bossFilename);
