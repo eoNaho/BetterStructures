@@ -32,7 +32,8 @@ public class SchematicContainer {
     private static final Map<Clipboard, SourceMarkers> SOURCE_MARKERS =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
     private record SourceMarkers(List<Vector> chests, Map<Vector, EntityType> vanilla,
-                                 Map<Vector, String> elite, Map<Vector, String> mythic) { }
+                                 Map<Vector, String> elite, Map<Vector, String> mythic,
+                                 Map<Vector, List<String>> custom) { }
     private static volatile boolean eliteMobsAvailable;
     private static volatile boolean mythicMobsAvailable;
     @Getter
@@ -53,6 +54,9 @@ public class SchematicContainer {
     private final HashMap<Vector, String> eliteMobsSpawns = new HashMap<>();
     @Getter
     private final HashMap<Vector, String> mythicMobsSpawns = new HashMap<>(); // carm - Support for MythicMobs
+    /** Lines two to four of each [custom] sign, for other plugins to interpret. */
+    @Getter
+    private final HashMap<Vector, List<String>> customMarkers = new HashMap<>();
     @Getter
     private ChestContents chestContents = null;
     @Getter
@@ -138,16 +142,30 @@ public class SchematicContainer {
                                                 ? ""
                                                 : ":" + level));
                             } // carm end - Support MythicMobs
+                            else if (line1.toLowerCase(Locale.ROOT).contains("[custom]")) {
+                                List<String> lines = new ArrayList<>();
+                                for (int i = 2; i < 5; i++) {
+                                    String line = WorldEditUtils.getLine(baseBlock, i);
+                                    lines.add(line == null ? "" : line.trim());
+                                }
+                                if (lines.stream().allMatch(String::isEmpty)) {
+                                    Logger.warn("Missing ID under a [custom] sign in schematic " + clipboardFilename);
+                                    continue;
+                                }
+                                customMarkers.put(new Vector(x, y, z), List.copyOf(lines));
+                            }
                         }
                     }
                 markers = new SourceMarkers(chestLocations.stream().map(Vector::clone).toList(),
-                    copyMarkers(vanillaSpawns), copyMarkers(eliteMobsSpawns), copyMarkers(mythicMobsSpawns));
+                    copyMarkers(vanillaSpawns), copyMarkers(eliteMobsSpawns), copyMarkers(mythicMobsSpawns),
+                    copyMarkers(customMarkers));
             SOURCE_MARKERS.put(clipboard, markers);
         } else {
             markers.chests().forEach(vector -> chestLocations.add(vector.clone()));
             vanillaSpawns.putAll(copyMarkers(markers.vanilla()));
             eliteMobsSpawns.putAll(copyMarkers(markers.elite()));
             mythicMobsSpawns.putAll(copyMarkers(markers.mythic()));
+            customMarkers.putAll(copyMarkers(markers.custom()));
         }
         if ((!eliteMobsAvailable && !eliteMobsSpawns.isEmpty())
                 || (!mythicMobsAvailable && !mythicMobsSpawns.isEmpty())) {

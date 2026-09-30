@@ -1,5 +1,7 @@
 package com.magmaguy.betterstructures.buildingfitter;
 
+import com.magmaguy.betterstructures.api.BuildCustomMarkerEvent;
+import com.magmaguy.betterstructures.api.BuildPasteCompleteEvent;
 import com.magmaguy.betterstructures.api.BuildPlaceEvent;
 import com.magmaguy.betterstructures.api.ChestFillEvent;
 import com.magmaguy.betterstructures.buildingfitter.util.FitUndergroundDeepBuilding;
@@ -38,6 +40,7 @@ import org.bukkit.util.Vector;
 
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -187,19 +190,20 @@ public class FitAnything {
             chunks = new PasteChunkReadiness(base.getWorld());
         }
         @Override public boolean hasNext() {
-            while (phase < 7) {
+            while (phase < 8) {
                 if (phase < 2) {
                     boolean enabled = phase == 0
                             ? !(FitAnything.this instanceof FitAirBuilding || FitAnything.this instanceof FitLiquidBuilding)
                             : FitAnything.this instanceof FitSurfaceBuilding;
                     if (enabled && x < schematicClipboard.getDimensions().x()) return true;
-                } else if (phase < 6) {
+                } else if (phase != 6) {
                     if (nextMarker != null) return true;
                     if (markers == null) markers = switch (phase) {
                         case 2 -> schematicContainer.getChestLocations().iterator();
                         case 3 -> schematicContainer.getVanillaSpawns().keySet().iterator();
                         case 4 -> schematicContainer.getEliteMobsSpawns().keySet().iterator();
-                        default -> schematicContainer.getMythicMobsSpawns().keySet().iterator();
+                        case 5 -> schematicContainer.getMythicMobsSpawns().keySet().iterator();
+                        default -> schematicContainer.getCustomMarkers().keySet().iterator();
                     };
                     if (markers.hasNext()) { nextMarker = markers.next(); return true; }
                 } else {
@@ -214,7 +218,7 @@ public class FitAnything {
         @Override public boolean ready() {
             Location destination;
             if (phase < 2) destination = corner.clone().add(x, 0, z);
-            else if (phase < 6) destination = LocationProjector.project(base, schematicOffset, nextMarker);
+            else if (phase != 6) destination = LocationProjector.project(base, schematicOffset, nextMarker);
             else {
                 var at = nextProp.getLocation();
                 var minimum = schematicClipboard.getMinimumPoint();
@@ -231,6 +235,7 @@ public class FitAnything {
                 case 4 -> spawnElite(nextMarker);
                 case 5 -> spawnMythic(nextMarker);
                 case 6 -> pasteProp();
+                case 7 -> announceCustomMarker(nextMarker);
                 default -> throw new IllegalStateException("Completed structure finishing operation");
             }
             if (phase < 2) {
@@ -256,7 +261,15 @@ public class FitAnything {
             try { if (entitySession != null) entitySession.close(); }
             finally { chunks.close(); }
         }
-        @Override public void onComplete() { announceComplete(base); }
+        @Override public void onComplete() {
+            var region = schematicClipboard.getRegion();
+            Location highestCorner = corner.clone().add(region.getWidth() - 1, region.getHeight() - 1, region.getLength() - 1);
+            List<Location> containers = schematicContainer.getChestLocations().stream()
+                    .map(position -> LocationProjector.project(base, schematicOffset, position)).toList();
+            Bukkit.getServer().getPluginManager().callEvent(
+                    new BuildPasteCompleteEvent(FitAnything.this, corner, highestCorner, containers));
+            announceComplete(base);
+        }
     }
 
     private void announceComplete(Location base) {
@@ -387,6 +400,14 @@ public class FitAnything {
                     Logger.warn("You are not using WorldGuard, so BetterStructures could not protect a boss arena! Using WorldGuard is recommended to guarantee a fair combat experience.");
                 }
             }
+    }
+
+    /** The sign is removed first so a listener can place blocks at the marker. */
+    private void announceCustomMarker(Vector position) {
+        Location markerLocation = LocationProjector.project(location, schematicOffset, position).clone();
+        markerLocation.getBlock().setType(Material.AIR);
+        Bukkit.getServer().getPluginManager().callEvent(
+                new BuildCustomMarkerEvent(this, markerLocation, schematicContainer.getCustomMarkers().get(position)));
     }
 
     private void spawnMythic(Vector position) {
