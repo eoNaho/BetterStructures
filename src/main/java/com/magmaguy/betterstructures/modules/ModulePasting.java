@@ -451,8 +451,8 @@ public final class ModulePasting {
                     var destination = transform.apply(origin).subtract(minimum.toVector3())
                             .add(module.location().getX(), module.location().getY(), module.location().getZ());
                     try {
-                        new com.sk89q.worldedit.function.entity.ExtentEntityCopy(origin, BukkitAdapter.adapt(world),
-                                destination, transform).apply(nextEntity);
+                        new com.sk89q.worldedit.function.entity.ExtentEntityCopy(origin, BlockAttachedEntityPaste.destination(world),
+                                destination, transform).apply(BlockAttachedEntityPaste.rotated(nextEntity, transform));
                     } catch (WorldEditException failure) { throw new IllegalStateException(failure); }
                     nextEntity = null;
                 }
