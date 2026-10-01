@@ -1,5 +1,7 @@
 package com.magmaguy.betterstructures.util;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.magmaguy.magmacore.util.Logger;
 import com.sk89q.jnbt.CompoundTag;
 import com.sk89q.jnbt.ListTag;
@@ -34,6 +36,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -147,10 +150,8 @@ public class WorldEditUtils {
             CompoundTag frontText = (CompoundTag) data.getValue().get("front_text");
             //Get messages
             ListTag messages = (ListTag) frontText.getValue().get("messages");
-            //Get the line
-            String text = messages.getString(line - 1);
-
-            if (text.contains("\"text\":")) text = text.split("text\":\"")[1].split("\"")[0];
+            //Typed lines are plain strings; plugins write text components, and 1.20-1.21.4 schematics JSON strings.
+            String text = componentText(messages.getValue().get(line - 1));
             text = text.replaceAll("\"", "");
             return text;
 
@@ -158,6 +159,48 @@ public class WorldEditUtils {
             Bukkit.getLogger().warning("Unexpected sign format in new read!\n" + data);
         }
         return null;
+    }
+
+    /** Plain text of a sign line stored as a string, a {text, extra} component, a component list, or a wrapped element. */
+    private static String componentText(Object tag) {
+        if (tag instanceof StringTag string) return jsonText(string.getValue());
+        if (tag instanceof ListTag list) {
+            StringBuilder text = new StringBuilder();
+            for (Object element : list.getValue()) text.append(componentText(element));
+            return text.toString();
+        }
+        if (tag instanceof CompoundTag compound) {
+            Map<String, ?> value = compound.getValue();
+            // NBT lists mixing strings and components wrap every element as {"": element}.
+            if (value.containsKey("")) return componentText(value.get(""));
+            StringBuilder text = new StringBuilder(value.get("text") instanceof StringTag string ? string.getValue() : "");
+            if (value.get("extra") != null) text.append(componentText(value.get("extra")));
+            return text.toString();
+        }
+        return "";
+    }
+
+    /** A JSON component string becomes its plain text; any other string already is plain text, "[spawn]" included. */
+    private static String jsonText(String value) {
+        if (!value.startsWith("{") && !value.startsWith("\"")) return value;
+        try {
+            return jsonComponentText(JsonParser.parseString(value));
+        } catch (RuntimeException notJson) {
+            return value;
+        }
+    }
+
+    private static String jsonComponentText(JsonElement element) {
+        if (element.isJsonPrimitive()) return element.getAsString();
+        StringBuilder text = new StringBuilder();
+        if (element.isJsonArray()) {
+            for (JsonElement part : element.getAsJsonArray()) text.append(jsonComponentText(part));
+        } else if (element.isJsonObject()) {
+            var object = element.getAsJsonObject();
+            if (object.has("text")) text.append(jsonComponentText(object.get("text")));
+            if (object.has("extra")) text.append(jsonComponentText(object.get("extra")));
+        }
+        return text.toString();
     }
 
     public static Clipboard createSingleBlockClipboard(BaseBlock baseBlock, BlockState blockState) {
