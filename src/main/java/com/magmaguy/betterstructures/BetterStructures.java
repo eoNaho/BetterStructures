@@ -30,6 +30,7 @@ import com.magmaguy.magmacore.dlc.ConfigurationImporter;
 import com.magmaguy.magmacore.initialization.PluginInitializationConfig;
 import com.magmaguy.magmacore.initialization.PluginInitializationContext;
 import com.magmaguy.magmacore.initialization.PluginInitializationState;
+import com.magmaguy.magmacore.nightbreak.NightbreakApplyPluginUpdateCommand;
 import com.magmaguy.magmacore.nightbreak.NightbreakDownloadContentCommand;
 import com.magmaguy.magmacore.nightbreak.NightbreakDownloadEverythingCommand;
 import com.magmaguy.magmacore.nightbreak.NightbreakDownloadPluginUpdateCommand;
@@ -115,8 +116,16 @@ public final class BetterStructures extends JavaPlugin {
         }
     }
 
+    private volatile Metrics metrics;
+
     @Override
     public void onDisable() {
+        // bStats runs its own scheduler thread; without this every reload leaves one
+        // reporting for, and holding on to, the previous instance.
+        if (metrics != null) {
+            metrics.shutdown();
+            metrics = null;
+        }
         contentReloadInProgress = false;
         activeReloadSenders.clear();
         queuedReloadSenders.clear();
@@ -241,6 +250,7 @@ public final class BetterStructures extends JavaPlugin {
         commandManager.registerCommand(new FirstTimeSetupCommand());
         commandManager.registerCommand(new NightbreakRecommendedPluginsCommand(this, NIGHTBREAK_PLUGIN_SPEC));
         commandManager.registerCommand(new NightbreakDownloadPluginUpdateCommand(this, NIGHTBREAK_PLUGIN_SPEC));
+        commandManager.registerCommand(new NightbreakApplyPluginUpdateCommand(this, NIGHTBREAK_PLUGIN_SPEC));
         commandManager.registerCommand(new NightbreakDownloadEverythingCommand<>(this,
                 NIGHTBREAK_PLUGIN_SPEC,
                 BetterStructures::availablePackages,
@@ -272,7 +282,7 @@ public final class BetterStructures extends JavaPlugin {
         }
 
         initializationContext.step("Metrics");
-        new Metrics(this, 19523);
+        metrics = new Metrics(this, 19523);
     }
 
     public void reloadImportedContent(CommandSender commandSender) {
