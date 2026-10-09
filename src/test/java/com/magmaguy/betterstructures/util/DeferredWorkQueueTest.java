@@ -7,6 +7,32 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeferredWorkQueueTest {
+    @Test void identifiesOverflowTimeoutAndExhaustedRetries() {
+        var queue = new DeferredWorkQueue<String, String>(1);
+        var reasons = new ArrayList<DeferredWorkQueue.DropReason>();
+        queue.addWithReason("a", "a", 0, 0, (value, reason) -> reasons.add(reason));
+        queue.addWithReason("b", "b", 0, 0, (value, reason) -> reasons.add(reason));
+        queue.drainWithReason(1, DeferredWorkQueue.TIMEOUT_NANOS, 1, value -> false,
+                value -> fail(), (value, reason) -> reasons.add(reason), () -> true);
+        queue.addWithReason("c", "c", 0, 0, (value, reason) -> reasons.add(reason));
+        for (int i = 1; i <= DeferredWorkQueue.MAX_ATTEMPTS; i++) {
+            queue.drainWithReason(i * 100L, 0, 1, value -> false,
+                    value -> fail(), (value, reason) -> reasons.add(reason), () -> true);
+        }
+        assertEquals(List.of(DeferredWorkQueue.DropReason.QUEUE_LIMIT,
+                DeferredWorkQueue.DropReason.TIMEOUT, DeferredWorkQueue.DropReason.ATTEMPTS), reasons);
+    }
+
+    @Test void cleanupCallbacksRunOnceForWorldRemovalAndShutdown() {
+        var queue = new DeferredWorkQueue<String, String>(4);
+        var released = new ArrayList<String>();
+        queue.add("a", "world-a", 0, 0, value -> fail());
+        queue.add("b", "world-b", 0, 0, value -> fail());
+        queue.removeIf(value -> value.equals("world-a"), released::add);
+        queue.clear(released::add);
+        queue.clear(released::add);
+        assertEquals(List.of("world-a", "world-b"), released);
+    }
     @Test void retriesBackOffWithoutExecutingWorkAndEventuallyDrop() {
         var queue = new DeferredWorkQueue<String, String>(4);
         var dropped = new ArrayList<String>();

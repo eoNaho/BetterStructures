@@ -66,9 +66,11 @@ class ChunkReadinessTest {
         when(world.getUID()).thenReturn(id);
         when(chunk.getX()).thenReturn(1);
         when(chunk.getZ()).thenReturn(2);
+        when(chunk.getWorld()).thenReturn(world);
         var future = new CompletableFuture<Chunk>();
         when(world.getChunkAtAsync(1, 2, true)).thenReturn(future);
         MetadataHandler.PLUGIN = mock(JavaPlugin.class);
+        when(chunk.addPluginChunkTicket(MetadataHandler.PLUGIN)).thenReturn(true);
         try (var bukkit = mockStatic(Bukkit.class); var readiness = new PasteChunkReadiness(world)) {
             bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             bukkit.when(() -> Bukkit.getWorld(id)).thenReturn(world);

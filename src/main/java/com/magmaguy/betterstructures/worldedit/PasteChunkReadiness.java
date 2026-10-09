@@ -7,6 +7,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.util.DeferredWorkQueue;
+import com.magmaguy.betterstructures.util.ChunkTicketLease;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -15,6 +16,7 @@ public final class PasteChunkReadiness implements AutoCloseable {
     private final World world;
     private CompletableFuture<Chunk> pending;
     private Chunk held;
+    private ChunkTicketLease tickets;
     private boolean closed;
     private long requestedAt;
     private int requestedX, requestedZ;
@@ -62,13 +64,15 @@ public final class PasteChunkReadiness implements AutoCloseable {
     private void hold(Chunk chunk) {
         ChunkAccess.requireLoaded(world, chunk.getX(), chunk.getZ());
         release();
-        chunk.addPluginChunkTicket(MetadataHandler.PLUGIN);
+        tickets = new ChunkTicketLease(MetadataHandler.PLUGIN);
+        tickets.retain(chunk);
         held = chunk;
     }
 
     private void release() {
         if (held != null) {
-            held.removePluginChunkTicket(MetadataHandler.PLUGIN);
+            tickets.close();
+            tickets = null;
             held = null;
         }
     }

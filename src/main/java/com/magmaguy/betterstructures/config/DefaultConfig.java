@@ -133,7 +133,9 @@ public class DefaultConfig extends ConfigurationFile {
         chunkScanBudgetMilliseconds = ConfigurationEngine.setDouble(List.of(
                 "Time budget in milliseconds for deferred scans each tick (0.1-10). Default: 2.",
                 "Checked between operations; an individual fitting pass may exceed this budget.",
-                "Missing chunks retry with backoff up to 16 checks or 60 seconds; queue limit: 4096, oldest discarded."),
+                "Loaded chunks are kept loaded while deferred work waits, including during external pregeneration.",
+                "Missing chunks retry with backoff up to 16 checks or 60 seconds; queue limit: 4096, oldest discarded.",
+                "Discard warnings identify QUEUE_LIMIT, TIMEOUT, ATTEMPTS or FAILURE. If QUEUE_LIMIT occurs, slow pregeneration."),
                 fileConfiguration, "chunkScanBudgetMilliseconds", 2.0);
         if (!Double.isFinite(chunkScanBudgetMilliseconds) || chunkScanBudgetMilliseconds < .1 || chunkScanBudgetMilliseconds > 10) {
             Logger.warn("Invalid chunkScanBudgetMilliseconds; using 2.");
