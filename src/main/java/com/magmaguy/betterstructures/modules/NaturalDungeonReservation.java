@@ -63,7 +63,7 @@ public final class NaturalDungeonReservation {
         return blockBounds;
     }
 
-    static BlockBounds blockBounds(
+    public static BlockBounds blockBounds(
             int originBlockX,
             int originBlockZ,
             int latticeRadius,

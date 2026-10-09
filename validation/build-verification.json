@@ -1,0 +1,18 @@
+{
+  "base_commit": "8efd4a51ab1e8dd1c023969d2bcbd15c4f369fb7",
+  "build": "BUILD SUCCESSFUL",
+  "tests": {
+    "tests": 79,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "production_api": "org.spigotmc:spigot-api:26.3-R0.1-SNAPSHOT",
+  "test_api": "Paper26.2 + MockBukkit26.2 (existing dependencies)",
+  "production_class_version": 65,
+  "test_jdk": "jdk-25.0.4.1+1",
+  "jar": "build/libs/BetterStructures.jar",
+  "jar_sha256": "201fcf5aae4e8d9a4e9aa59c5760c24155de3f58dfe51362a0dfe46a1e3fe871",
+  "manual_purpur_test": "Not executed; procedure in chunk-safety-report.txt",
+  "baseline_build_failure": "Missing MagmaCore.instance.MatchInstance with EliteMobs10.9.7. Resolved with existing dependency updated to10.9.8."
+}

@@ -48,6 +48,12 @@ public class ChunkPregenerator implements Listener {
     private volatile boolean isCancelled = false;
     private volatile boolean isPaused = false;
     private boolean isFinished = false;
+    private final java.util.Map<String, java.util.concurrent.CompletableFuture<Chunk>> pendingChunks = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, Long> requestedAt = new java.util.HashMap<>();
+    private record ChunkRequest(int x, int z, String key) { }
+    private final java.util.Queue<ChunkRequest> waitingRequests = new java.util.ArrayDeque<>();
+    private Runnable layerComplete;
+    private BukkitTask asyncPollTask;
 
     public static Set<ChunkPregenerator> getActivePregenerators() {
         return Set.copyOf(activePregenerators);
@@ -89,6 +95,8 @@ public class ChunkPregenerator implements Listener {
 
         // Start TPS monitoring task (every 2 seconds = 40 ticks)
         tpsMonitorTask = Bukkit.getScheduler().runTaskTimer(MetadataHandler.PLUGIN, this::checkTPSAndPause, 40L, 40L);
+
+        asyncPollTask = Bukkit.getScheduler().runTaskTimer(MetadataHandler.PLUGIN, this::pollChunkRequests, 1L, 1L);
 
         // Start with radius 0 (center chunk)
         generateNextLayer();
@@ -144,21 +152,15 @@ public class ChunkPregenerator implements Listener {
 
         final boolean[] chunksAdded = {false};
 
+        Runnable nextLayer = () -> {
+            if (isCancelled) { onCancelled(); return; }
+            currentRadius++;
+            generateNextLayer();
+        };
         WorkloadRunnable workload = new WorkloadRunnable(tickUsage, () -> {
-            // Check if cancelled before continuing
-            if (isCancelled) {
-                onCancelled();
-                return;
-            }
-
-            // When this layer completes, generate the next layer if chunks were added
-            if (chunksAdded[0]) {
-                currentRadius++;
-                generateNextLayer();
-            } else {
-                // No more chunks to generate, we're done
-                onComplete();
-            }
+            // A dispatched layer is not complete until its asynchronous loads finish.
+            if (pendingChunks.isEmpty() && waitingRequests.isEmpty()) nextLayer.run();
+            else layerComplete = nextLayer;
         });
 
         if ("SQUARE".equalsIgnoreCase(shape)) {
@@ -173,6 +175,10 @@ public class ChunkPregenerator implements Listener {
 
         // If no chunks were added to this layer, skip the workload and move to next layer immediately
         if (!chunksAdded[0]) {
+            if (!pendingChunks.isEmpty() || !waitingRequests.isEmpty()) {
+                layerComplete = nextLayer;
+                return;
+            }
             currentRadius++;
             generateNextLayer();
             return;
@@ -264,21 +270,43 @@ public class ChunkPregenerator implements Listener {
     }
 
     private void generateChunk(int chunkX, int chunkZ, String chunkKey) {
-        try {
-            Chunk chunk = world.getChunkAt(chunkX, chunkZ);
-            if (!chunk.isLoaded()) {
-                if (!chunk.load(true)) throw new IllegalStateException("Chunk load was refused");
+        if (waitingRequests.size() >= 4096) {
+            Logger.warn("Pregeneration queue limit reached in " + world.getName() + " at " + chunkKey + "; stopping without changing the border.");
+            cancel();
+            return;
+        }
+        waitingRequests.add(new ChunkRequest(chunkX, chunkZ, chunkKey));
+    }
+
+    private void pollChunkRequests() {
+        if (isCancelled || isFinished) return;
+        int checks = 0;
+        for (String key : java.util.List.copyOf(pendingChunks.keySet())) {
+            if (++checks > 32) break;
+            var future = pendingChunks.get(key);
+            try {
+                if (System.nanoTime() - requestedAt.get(key) >= DeferredWorkQueue.TIMEOUT_NANOS)
+                    throw new IllegalStateException("Asynchronous load timed out");
+                if (!future.isDone()) continue;
+                if (future.join() == null) throw new IllegalStateException("Chunk load returned null");
+                pendingChunks.remove(key);
+                requestedAt.remove(key);
+            } catch (RuntimeException failure) {
+                generatedChunks.remove(key);
+                Logger.warn("Pregeneration stopped in " + world.getName() + " at " + key + ": " + failure);
+                cancel();
+                return;
             }
-            // Chunk counting is now handled by ChunkLoadEvent listener
-        } catch (Exception e) {
-            generatedChunks.remove(chunkKey);
-            Logger.warn("Failed to generate chunk at (" + chunkX + ", " + chunkZ + "): " + e.getMessage());
-            isCancelled = true;
-            if (beginFinish()) {
-                cleanup();
-                Logger.warn("Chunk pregeneration incomplete. Failed coordinate: " + chunkKey
-                        + "; completed " + generatedChunks.size() + " chunks. World border was not changed.");
-            }
+        }
+        if (!isPaused) for (int requests = 0; requests < 4 && pendingChunks.size() < 32 && !waitingRequests.isEmpty(); requests++) {
+            ChunkRequest request = waitingRequests.remove();
+            pendingChunks.put(request.key(), ChunkAccess.request(world, request.x(), request.z()));
+            requestedAt.put(request.key(), System.nanoTime());
+        }
+        if (!isPaused && pendingChunks.isEmpty() && waitingRequests.isEmpty() && layerComplete != null) {
+            Runnable completed = layerComplete;
+            layerComplete = null;
+            completed.run();
         }
     }
 
@@ -317,6 +345,12 @@ public class ChunkPregenerator implements Listener {
             currentWorkloadTask = null;
         }
         queuedChunks.clear();
+        pendingChunks.values().forEach(future -> future.cancel(false));
+        pendingChunks.clear();
+        waitingRequests.clear();
+        requestedAt.clear();
+        layerComplete = null;
+        if (asyncPollTask != null) { asyncPollTask.cancel(); asyncPollTask = null; }
 
         // Unregister event listener
         HandlerList.unregisterAll(this);

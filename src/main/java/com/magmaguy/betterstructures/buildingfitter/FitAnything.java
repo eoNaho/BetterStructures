@@ -15,6 +15,9 @@ import com.magmaguy.betterstructures.thirdparty.EliteMobs;
 import com.magmaguy.betterstructures.thirdparty.MythicMobs;
 import com.magmaguy.betterstructures.thirdparty.WorldGuard;
 import com.magmaguy.betterstructures.util.SurfaceMaterials;
+import com.magmaguy.betterstructures.util.ChunkAccess;
+import com.magmaguy.betterstructures.util.ChunkFootprint;
+import com.magmaguy.betterstructures.listeners.DeferredChunkWork;
 import com.magmaguy.betterstructures.worldedit.Schematic;
 import com.magmaguy.betterstructures.worldedit.PasteChunkReadiness;
 import com.sk89q.worldedit.EditSession;
@@ -74,6 +77,24 @@ public class FitAnything {
     public FitAnything() {
     }
 
+    protected void initializeWhenLoaded(Chunk chunk, java.util.function.Consumer<Chunk> scan) {
+        int x = chunk.getX(), z = chunk.getZ();
+        DeferredChunkWork.submit(new Object(), chunk.getWorld().getUID(), new ChunkFootprint(x, z, x, z),
+                "initialize " + structureType + " at " + x + "," + z,
+                world -> scan.accept(ChunkAccess.loadedChunk(world, x, z)));
+    }
+
+    protected void fitWhenLoaded(Location anchor, Runnable fit) {
+        // Union of every candidate footprint, including the original height/biome column.
+        // Only X/Z matter: every topology and underground probe is vertical.
+        double minX = Math.min(anchor.getX(), anchor.getX() + schematicOffset.getX() - searchRadius * 16);
+        double minZ = Math.min(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() - searchRadius * 16);
+        double maxX = Math.max(anchor.getX(), anchor.getX() + schematicOffset.getX() + searchRadius * 16 + schematicClipboard.getDimensions().x() - 1);
+        double maxZ = Math.max(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() + searchRadius * 16 + schematicClipboard.getDimensions().z() - 1);
+        DeferredChunkWork.submit(new Object(), anchor.getWorld().getUID(), ChunkFootprint.blocks(minX, minZ, maxX, maxZ),
+                "fit " + structureType + " at " + anchor.getBlockX() + "," + anchor.getBlockZ(), world -> fit.run());
+    }
+
     public static void commandBasedCreation(Chunk chunk, GeneratorConfigFields.StructureType structureType, SchematicContainer container) {
         switch (structureType) {
             case SKY:
@@ -108,6 +129,7 @@ public class FitAnything {
         BuildPlaceEvent buildPlaceEvent = new BuildPlaceEvent(this);
         Bukkit.getServer().getPluginManager().callEvent(buildPlaceEvent);
         if (buildPlaceEvent.isCancelled()) return;
+        if (com.magmaguy.betterstructures.BetterStructures.isReloading()) return;
 
         Schematic.enqueue(new Preparation(location.clone()));
     }
@@ -163,6 +185,7 @@ public class FitAnything {
             if (z >= schematicClipboard.getDimensions().z()) { z = 0; x += scanStep; }
             if (x >= schematicClipboard.getDimensions().x()) { x = 0; phase++; }
         }
+        @Override public java.util.UUID worldId() { return base.getWorld().getUID(); }
         @Override public void close() { chunks.close(); }
         @Override public void onComplete() {
             setDefaultPedestalMaterial(base);
@@ -257,6 +280,7 @@ public class FitAnything {
             try { entityCopy.apply(nextProp); }
             catch (com.sk89q.worldedit.WorldEditException failure) { throw new IllegalStateException("Could not paste structure entity", failure); }
         }
+        @Override public java.util.UUID worldId() { return base.getWorld().getUID(); }
         @Override public void close() {
             try { if (entitySession != null) entitySession.close(); }
             finally { chunks.close(); }
@@ -318,7 +342,7 @@ public class FitAnything {
         for (int y = -1; y > -11; y--) {
             Block block = corner.clone().add(x, y, z).getBlock();
             if (!SurfaceMaterials.ignorable(block.getType())) break;
-            block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()));
+            block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()), false);
         }
     }
 
@@ -326,7 +350,7 @@ public class FitAnything {
         for (int y = 0; y < 31; y++) {
             Block block = corner.clone().add(x, schematicClipboard.getDimensions().y() + 1 + y, z).getBlock();
             if (!SurfaceMaterials.ignorable(block.getType()) || block.getType().isAir()) break;
-            block.setType(Material.AIR);
+            block.setType(Material.AIR, false);
         }
     }
 
@@ -359,13 +383,14 @@ public class FitAnything {
             ChestFillEvent chestFillEvent = new ChestFillEvent(container, contents.getTreasureConfigFields().getFilename());
             Bukkit.getServer().getPluginManager().callEvent(chestFillEvent);
             if (!chestFillEvent.isCancelled()) {
-                container.update(true);
+                ChunkAccess.requireLoaded(chestLocation.getWorld(), chestLocation.getBlockX() >> 4, chestLocation.getBlockZ() >> 4);
+                container.update(true, false);
             }
     }
 
     private void spawnVanilla(Vector entityPosition) {
             Location signLocation = LocationProjector.project(location, schematicOffset, entityPosition).clone();
-            signLocation.getBlock().setType(Material.AIR);
+            signLocation.getBlock().setType(Material.AIR, false);
             //If mobs spawn in corners they might choke on adjacent walls
             signLocation.add(new Vector(0.5, 0, 0.5));
             Entity entity = signLocation.getWorld().spawnEntity(signLocation, schematicContainer.getVanillaSpawns().get(entityPosition));
@@ -383,7 +408,7 @@ public class FitAnything {
 
     private void spawnElite(Vector elitePosition) {
             Location eliteLocation = LocationProjector.project(location, schematicOffset, elitePosition).clone();
-            eliteLocation.getBlock().setType(Material.AIR);
+            eliteLocation.getBlock().setType(Material.AIR, false);
             eliteLocation.add(new Vector(0.5, 0, 0.5));
             String bossFilename = schematicContainer.getEliteMobsSpawns().get(elitePosition);
             //If the spawn fails then don't continue
@@ -405,14 +430,14 @@ public class FitAnything {
     /** The sign is removed first so a listener can place blocks at the marker. */
     private void announceCustomMarker(Vector position) {
         Location markerLocation = LocationProjector.project(location, schematicOffset, position).clone();
-        markerLocation.getBlock().setType(Material.AIR);
+        markerLocation.getBlock().setType(Material.AIR, false);
         Bukkit.getServer().getPluginManager().callEvent(
                 new BuildCustomMarkerEvent(this, markerLocation, schematicContainer.getCustomMarkers().get(position)));
     }
 
     private void spawnMythic(Vector position) {
             Location mobLocation = LocationProjector.project(location, schematicOffset, position).clone();
-            mobLocation.getBlock().setType(Material.AIR);
+            mobLocation.getBlock().setType(Material.AIR, false);
 
             //If the spawn fails then don't continue
             if (!MythicMobs.Spawn(mobLocation, schematicContainer.getMythicMobsSpawns().get(position)))

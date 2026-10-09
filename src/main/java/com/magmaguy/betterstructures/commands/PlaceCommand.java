@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.commands;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.BetterStructures;
 import com.magmaguy.betterstructures.buildingfitter.FitAnything;
 import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
@@ -62,7 +63,8 @@ public class PlaceCommand extends AdvancedCommand {
                 player.sendMessage("[BetterStructures] Failed to get valid schematic type!");
                 return;
             }
-            FitAnything.commandBasedCreation(player.getLocation().getChunk(), structureType, commandSchematicContainer);
+            FitAnything.commandBasedCreation(ChunkAccess.loadedChunk(player.getWorld(),
+                    player.getLocation().getBlockX() >> 4, player.getLocation().getBlockZ() >> 4), structureType, commandSchematicContainer);
             player.sendMessage("[BetterStructures] Attempted to place " + schematicFile + " !");
         } catch (Exception ex) {
             player.sendMessage("[BetterStructures] Invalid schematic!");

@@ -32,7 +32,15 @@ public class TeleportCommand extends AdvancedCommand {
             double x = Double.parseDouble(commandData.getStringArgument("x"));
             double y = Double.parseDouble(commandData.getStringArgument("y"));
             double z = Double.parseDouble(commandData.getStringArgument("z"));
-            commandData.getPlayerSender().teleport(new Location(world, x, y, z));
+            var player = commandData.getPlayerSender();
+            @SuppressWarnings("unchecked")
+            var future = (java.util.concurrent.CompletableFuture<Boolean>) player.getClass()
+                    .getMethod("teleportAsync", Location.class).invoke(player, new Location(world, x, y, z));
+            future.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS).exceptionally(failure -> {
+                // Timeout completion can run off-thread. Only the thread-safe logger is used here.
+                com.magmaguy.betterstructures.MetadataHandler.PLUGIN.getLogger().warning("Asynchronous teleport failed: " + failure);
+                return false;
+            });
         } catch (Exception ex) {
             Logger.sendMessage(commandData.getCommandSender(), "Failed to teleport to location because the location wasn't valid!");
         }

@@ -56,7 +56,8 @@ public class BuildPasteCompleteEvent extends Event {
      * @return The space covered by every block of the pasted schematic.
      */
     public BoundingBox getBoundingBox() {
-        return BoundingBox.of(lowestCorner.getBlock(), highestCorner.getBlock());
+        return new BoundingBox(lowestCorner.getBlockX(), lowestCorner.getBlockY(), lowestCorner.getBlockZ(),
+                highestCorner.getBlockX() + 1D, highestCorner.getBlockY() + 1D, highestCorner.getBlockZ() + 1D);
     }
 
     /**

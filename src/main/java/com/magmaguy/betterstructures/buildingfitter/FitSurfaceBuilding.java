@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.buildingfitter;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
 import com.magmaguy.betterstructures.buildingfitter.util.Topology;
 import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
@@ -18,20 +19,20 @@ public class FitSurfaceBuilding extends FitAnything {
         super.structureType = GeneratorConfigFields.StructureType.SURFACE;
         this.schematicContainer = schematicContainer;
         this.schematicClipboard = schematicContainer.getClipboard();
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     public FitSurfaceBuilding(Chunk chunk) {
         super();
         super.structureType = GeneratorConfigFields.StructureType.SURFACE;
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     private void scan(Chunk chunk) {
         //Note about the adjustments:
         //The 8 offset on x and y is to center the anchor on the chunk
         Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16D, 0, chunk.getZ() * 16D).add(new Vector(8, 0, 8));
-        originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));
+        originalLocation.setY(ChunkAccess.highestY(originalLocation));
         randomizeSchematicContainer(originalLocation, GeneratorConfigFields.StructureType.SURFACE);
         if (schematicClipboard == null) {
             //Bukkit.getLogger().info("Did not spawn structure in biome " + originalLocation.getBlock().getBiome() + " because no valid schematics exist for it.");
@@ -39,6 +40,10 @@ public class FitSurfaceBuilding extends FitAnything {
         }
         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
 
+        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+    }
+
+    private void finishScan(Location originalLocation) {
         chunkScan(originalLocation, 0, 0);
         if (highestScore < 50)
             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {

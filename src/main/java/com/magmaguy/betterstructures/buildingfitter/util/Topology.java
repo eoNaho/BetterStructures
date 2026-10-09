@@ -1,5 +1,7 @@
 package com.magmaguy.betterstructures.buildingfitter.util;
 
+import com.magmaguy.betterstructures.util.ChunkFootprint;
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.util.SurfaceMaterials;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import org.bukkit.Bukkit;
@@ -17,6 +19,12 @@ public class Topology {
         double score = startingScore;
         int width = schematicClipboard.getDimensions().x();
         int depth = schematicClipboard.getDimensions().z();
+
+        if (!ChunkFootprint.blocks(
+                iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
+                iteratedLocation.getX() + schematicOffset.getX() + width - 1,
+                iteratedLocation.getZ() + schematicOffset.getZ() + depth - 1).isLoaded(iteratedLocation.getWorld()))
+            throw new IllegalStateException("Terrain footprint is not loaded");
 
         ArrayList<Integer> heights = new ArrayList<>();
 
@@ -73,7 +81,8 @@ public class Topology {
 
     private static Location getHighestBlockAt(Location location) {
         if (!location.getWorld().getEnvironment().equals(World.Environment.NETHER))
-            return location.getWorld().getHighestBlockAt(location).getLocation();
+            return new Location(location.getWorld(), location.getBlockX(),
+                    ChunkAccess.highestY(location), location.getBlockZ());
         else {
             //This is middle point for the height in the Nether
             location.setY(63);

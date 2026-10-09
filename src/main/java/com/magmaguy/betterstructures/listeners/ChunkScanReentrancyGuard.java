@@ -1,9 +1,9 @@
 package com.magmaguy.betterstructures.listeners;
 
 /**
- * Suppresses nested chunk scans caused by terrain lookups or block placement.
- * A nested new-chunk event is a side effect of BetterStructures' own scan; replaying
- * it later can recursively fan out across every neighboring chunk.
+ * Prevents nested drains, including those triggered by third-party event listeners.
+ * Chunk events only enqueue work now; our reads never enter managedBlock. Retain
+ * the guard as defense against callbacks that execute scheduler work recursively.
  */
 final class ChunkScanReentrancyGuard {
 

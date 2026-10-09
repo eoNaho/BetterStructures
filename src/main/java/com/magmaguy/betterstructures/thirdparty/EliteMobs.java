@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.thirdparty;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.MetadataHandler;
 import com.magmaguy.elitemobs.commands.ReloadCommand;
 import com.magmaguy.elitemobs.dungeons.EliteMobsWorld;
@@ -25,6 +26,7 @@ public class EliteMobs {
      * @param filename Filename of the boss, as set in the EliteMobs custombosses configuration folder
      */
     public static boolean Spawn(Location location, String filename) {
+        ChunkAccess.requireLoaded(location.getWorld(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
         if (Bukkit.getPluginManager().getPlugin("EliteMobs") != null) {
             RegionalBossEntity regionalBossEntity = RegionalBossEntity.SpawnRegionalBoss(filename, location);
             if (regionalBossEntity == null) {

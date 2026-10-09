@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.worldedit;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.MetadataHandler;
 import com.magmaguy.betterstructures.config.DefaultConfig;
 import com.magmaguy.betterstructures.util.WorldEditUtils;
@@ -129,23 +130,13 @@ public class Schematic {
     }
 
     /**
-     * Pastes a schematic synchronously
+     * Enqueues a raw schematic paste. Each destination must be ready before WorldEdit touches it.
      *
      * @param clipboard The WorldEdit clipboard containing the schematic
      * @param location  The location to paste at
      */
     public static void paste(Clipboard clipboard, Location location) {
-        World world = BukkitAdapter.adapt(location.getWorld());
-        try (EditSession editSession = WorldEdit.getInstance().newEditSession(world)) {
-            Operation operation = new ClipboardHolder(clipboard)
-                    .createPaste(editSession)
-                    .to(BlockVector3.at(location.getX(), location.getY(), location.getZ()))
-                    // configure here
-                    .build();
-            Operations.complete(operation);
-        } catch (WorldEditException e) {
-            throw new RuntimeException(e);
-        }
+        enqueue(new DirectPasteOperation(clipboard, location.clone(), false));
     }
 
     private static boolean isSolidBlock(Clipboard schematicClipboard, BlockVector3 clipboardPosition) {
@@ -224,12 +215,11 @@ public class Schematic {
             Vector schematicOffset,
             Function<Boolean, Material> pedestalMaterialProvider,
             Runnable onComplete) {
-        pasteQueue.add(new ClipboardPasteOperation(
+        enqueue(new ClipboardPasteOperation(
                 schematicClipboard,
                 location.clone().add(schematicOffset),
                 pedestalMaterialProvider,
                 onComplete));
-        startQueueIfIdle();
     }
 
     private static void startQueueIfIdle() {
@@ -237,6 +227,14 @@ public class Schematic {
     }
 
     public static void enqueue(PasteOperation operation) {
+        ChunkAccess.requireMainThread();
+        if (pasteQueue.size() >= 4096) {
+            PasteOperation discarded = pasteQueue.poll();
+            if (discarded != null) {
+                discarded.close();
+                Logger.warn("Discarded oldest paste at queue limit; world=" + discarded.worldId());
+            }
+        }
         pasteQueue.add(operation);
         startQueueIfIdle();
     }
@@ -322,10 +320,11 @@ public class Schematic {
                 // Paper can try to load the old block entity against the replacement state.
                 destination.getState();
             }
-            destination.setBlockData(pasteBlock.blockData());
+            destination.setBlockData(pasteBlock.blockData(), false);
         } else if (pasteBlock.clipboard() != null) {
             try (EditSession editSession = WorldEdit.getInstance().newEditSession(
                     BukkitAdapter.adapt(pasteBlock.block().getLocation().getWorld()))) {
+                editSession.setSideEffectApplier(com.sk89q.worldedit.util.SideEffectSet.none());
                 Operation worldeditPaste = new ClipboardHolder(pasteBlock.clipboard())
                         .createPaste(editSession)
                         .to(BlockVector3.at(
@@ -374,7 +373,82 @@ public class Schematic {
         isDistributedPasting = false;
     }
 
+    public static void discardWorld(UUID worldId) {
+        pasteQueue.removeIf(operation -> {
+            if (!worldId.equals(operation.worldId())) return false;
+            operation.close();
+            return true;
+        });
+        if (activePasteOperation != null && worldId.equals(activePasteOperation.worldId())) {
+            if (activePasteTask != null) activePasteTask.cancel();
+            abortActivePaste();
+            processNextPaste();
+        }
+    }
+
+    /** The raw WorldEdit path also uses readiness, including entity destinations outside the region. */
+    public static void pasteRaw(Clipboard clipboard, Location location, boolean skipAir, boolean entitiesOnly) {
+        DirectPasteOperation operation = new DirectPasteOperation(clipboard, location.clone(), skipAir);
+        if (entitiesOnly) operation.blocks = Collections.emptyIterator();
+        enqueue(operation);
+    }
+
+    private static final class DirectPasteOperation implements PasteOperation {
+        private final Clipboard clipboard;
+        private final Location location;
+        private final boolean skipAir;
+        private final PasteChunkReadiness chunks;
+        private Iterator<BlockVector3> blocks;
+        private final Iterator<? extends com.sk89q.worldedit.entity.Entity> entities;
+        private BlockVector3 nextBlock;
+        private com.sk89q.worldedit.entity.Entity nextEntity;
+        private Location target;
+
+        private DirectPasteOperation(Clipboard clipboard, Location location, boolean skipAir) {
+            this.clipboard = clipboard;
+            // ClipboardHolder's old destination was BlockVector3.at(location), i.e. floored.
+            this.location = new Location(location.getWorld(), location.getBlockX(), location.getBlockY(), location.getBlockZ());
+            this.skipAir = skipAir;
+            chunks = new PasteChunkReadiness(location.getWorld());
+            blocks = clipboard.getRegion().iterator();
+            entities = clipboard.getEntities().iterator();
+        }
+
+        @Override public UUID worldId() { return location.getWorld().getUID(); }
+        @Override public boolean hasNext() { return nextBlock != null || nextEntity != null || blocks.hasNext() || entities.hasNext(); }
+        @Override public boolean ready() {
+            if (nextBlock == null && nextEntity == null) {
+                if (blocks.hasNext()) nextBlock = blocks.next();
+                else if (entities.hasNext()) nextEntity = entities.next();
+            }
+            var origin = clipboard.getOrigin();
+            var position = nextBlock != null ? nextBlock.toVector3() : nextEntity.getLocation().toVector();
+            target = location.clone().add(position.x() - origin.x(), position.y() - origin.y(), position.z() - origin.z());
+            return chunks.ready(target);
+        }
+        @Override public void pasteNext() {
+            try (EditSession edit = WorldEdit.getInstance().newEditSession(BukkitAdapter.adapt(location.getWorld()))) {
+                edit.setTrackingHistory(false);
+                edit.setSideEffectApplier(com.sk89q.worldedit.util.SideEffectSet.none());
+                if (nextBlock != null) {
+                    BaseBlock block = clipboard.getFullBlock(nextBlock);
+                    if (!skipAir || !WorldEditUtils.isAir(block.toImmutableState()))
+                        edit.setBlock(BlockVector3.at(target.getBlockX(), target.getBlockY(), target.getBlockZ()), block);
+                } else {
+                    new com.sk89q.worldedit.function.entity.ExtentEntityCopy(clipboard.getOrigin().toVector3(), edit,
+                            com.sk89q.worldedit.math.Vector3.at(location.getX(), location.getY(), location.getZ()),
+                            new com.sk89q.worldedit.math.transform.AffineTransform()).apply(nextEntity);
+                }
+            } catch (WorldEditException failure) { throw new IllegalStateException(failure); }
+            nextBlock = null;
+            nextEntity = null;
+        }
+        @Override public void close() { chunks.close(); }
+        @Override public void onComplete() { }
+    }
+
     public interface PasteOperation {
+        default UUID worldId() { return null; }
         boolean hasNext();
 
         default boolean ready() { return true; }
@@ -414,6 +488,8 @@ public class Schematic {
         public boolean ready() {
             return chunks.ready(adjustedLocation.clone().add(cursor.x, cursor.y, cursor.z));
         }
+
+        @Override public UUID worldId() { return adjustedLocation.getWorld().getUID(); }
 
         @Override public void close() { chunks.close(); }
 

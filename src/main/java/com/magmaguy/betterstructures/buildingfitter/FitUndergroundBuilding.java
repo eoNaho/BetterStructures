@@ -26,7 +26,7 @@ public class FitUndergroundBuilding extends FitAnything {
         this.highestY = highestY;
         this.schematicContainer = schematicContainer;
         this.schematicClipboard = schematicContainer.getClipboard();
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     public FitUndergroundBuilding(Chunk chunk, int lowestY, int highestY, GeneratorConfigFields.StructureType structureType) {
@@ -34,7 +34,7 @@ public class FitUndergroundBuilding extends FitAnything {
         super.structureType = structureType;
         this.lowestY = lowestY;
         this.highestY = highestY;
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     private void scan(Chunk chunk) {
@@ -134,6 +134,10 @@ public class FitUndergroundBuilding extends FitAnything {
                 break;
         }
 
+        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+    }
+
+    private void finishScan(Location originalLocation) {
         chunkScan(originalLocation, 0, 0);
         if (highestScore < 90)
             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {

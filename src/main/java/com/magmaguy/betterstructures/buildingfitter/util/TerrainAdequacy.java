@@ -1,5 +1,7 @@
 package com.magmaguy.betterstructures.buildingfitter.util;
 
+import com.magmaguy.betterstructures.util.ChunkFootprint;
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.util.SurfaceMaterials;
 import com.magmaguy.betterstructures.util.WorldEditUtils;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
@@ -21,6 +23,12 @@ public class TerrainAdequacy {
         int width = schematicClipboard.getDimensions().x();
         int depth = schematicClipboard.getDimensions().z();
         int height = schematicClipboard.getDimensions().y();
+
+        if (!ChunkFootprint.blocks(
+                iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
+                iteratedLocation.getX() + schematicOffset.getX() + width - 1,
+                iteratedLocation.getZ() + schematicOffset.getZ() + depth - 1).isLoaded(iteratedLocation.getWorld()))
+            throw new IllegalStateException("Terrain footprint is not loaded");
 
         //Clipboard reads are absolute: the region spans [minimumPoint, maximumPoint], and reads
         //outside it silently return air. Zero-based coordinates must be offset by the minimum
@@ -52,7 +60,7 @@ public class TerrainAdequacy {
 
     private static boolean isBlockAdequate(Location projectedWorldLocation, boolean schematicBlockIsAir, boolean schematicBlockIsLiquid, int floorHeight, ScanType scanType) {
         int floorYValue = projectedWorldLocation.getBlockY();
-        Material terrain = projectedWorldLocation.getBlock().getType();
+        Material terrain = ChunkAccess.block(projectedWorldLocation).getType();
         if (terrain == Material.VOID_AIR) return false;
         switch (scanType) {
             case SURFACE:

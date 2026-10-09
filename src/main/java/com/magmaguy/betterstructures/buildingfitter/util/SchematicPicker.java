@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.buildingfitter.util;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
 import com.magmaguy.betterstructures.schematics.SchematicContainer;
 import com.magmaguy.betterstructures.util.WeighedProbability;
@@ -19,7 +20,7 @@ public class SchematicPicker {
         if (schematicContainers.isEmpty()) return null;
         String worldName = naiveAnchorLocation.getWorld().getName();
         World.Environment environment = naiveAnchorLocation.getWorld().getEnvironment();
-        Object biome = naiveAnchorLocation.getBlock().getBiome();
+        Object biome = ChunkAccess.block(naiveAnchorLocation).getBiome();
         int blockY = naiveAnchorLocation.getBlockY();
         schematicContainers.removeIf(schematicContainer ->
                 !schematicContainer.isValidWorld(worldName) ||

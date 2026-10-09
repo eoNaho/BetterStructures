@@ -12,6 +12,7 @@ import com.magmaguy.betterstructures.config.treasures.TreasureConfig;
 import com.magmaguy.betterstructures.config.treasures.TreasureConfigFields;
 import com.magmaguy.betterstructures.thirdparty.EliteMobs;
 import com.magmaguy.betterstructures.util.WorldEditUtils;
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.easyminecraftgoals.NMSManager;
 import com.magmaguy.magmacore.util.Logger;
 import com.magmaguy.magmacore.util.SpigotMessage;
@@ -143,50 +144,10 @@ public final class ModulePasting {
             throw new RuntimeException(e);
         }
 
-        // Get dimensions and calculate proper center
-        BlockVector3 minPoint = transformedClipboard.getMinimumPoint();
-
-        World world = location.getWorld();
-        int baseX = location.getBlockX();
-        int baseY = location.getBlockY();
-        int baseZ = location.getBlockZ();
-
-        // Create edit session for actual placement
-        com.sk89q.worldedit.world.World adaptedWorld = BukkitAdapter.adapt(world);
-
-        try (EditSession editSession = WorldEdit.getInstance().newEditSession(adaptedWorld)) {
-            editSession.setTrackingHistory(false);
-            editSession.setSideEffectApplier(SideEffectSet.none());
-
-            // Process each block using calculated center point as reference
-            transformedClipboard.getRegion().forEach(blockPos -> {
-                try {
-                    BaseBlock baseBlock = transformedClipboard.getFullBlock(blockPos);
-
-                    // Skip air blocks
-                    if (baseBlock.getBlockType().getMaterial().isAir()) return;
-
-                    // Calculate world coordinates relative to center point
-                    int worldX = baseX + (blockPos.x() - minPoint.x());
-                    int worldY = baseY + (blockPos.y() - minPoint.y());
-                    int worldZ = baseZ + (blockPos.z() - minPoint.z());
-
-                    // Place the block
-                    BlockVector3 worldPos = BlockVector3.at(worldX, worldY, worldZ);
-                    editSession.setBlock(worldPos, baseBlock);
-
-                } catch (WorldEditException e) {
-                    Logger.warn("Failed to place block at " + blockPos + ": " + e.getMessage());
-                }
-            });
-
-            //The clipboard is already rotated; going through pasteArmorStands() would rotate it twice
-            WorldEditUtils.pasteArmorStandsOnlyFromTransformed(transformedClipboard, location);
-
-        } catch (Exception e) {
-            Logger.warn("Failed to paste structure: " + e.getMessage());
-            throw new RuntimeException(e);
-        }
+        var minimum = transformedClipboard.getMinimumPoint();
+        var origin = transformedClipboard.getOrigin();
+        Location destination = location.clone().add(origin.x() - minimum.x(), origin.y() - minimum.y(), origin.z() - minimum.z());
+        com.magmaguy.betterstructures.worldedit.Schematic.pasteRaw(transformedClipboard, destination, true, false);
     }
 
     private static int normalizeRotation(int rotation) {
@@ -370,6 +331,7 @@ public final class ModulePasting {
         private boolean cancelled;
 
         private ModularPaste(List<ModuleInput> inputs) { this.inputs = inputs; }
+        @Override public java.util.UUID worldId() { return world.getUID(); }
         public boolean hasNext() { return !closed && phase < 8; }
 
         private void selectModule() {
@@ -521,7 +483,11 @@ public final class ModulePasting {
             contents.rollChestContents(container);
             ChestFillEvent event = new ChestFillEvent(container, filename);
             Bukkit.getPluginManager().callEvent(event);
-            if (!event.isCancelled()) container.update(true);
+            if (!event.isCancelled()) {
+                var at = container.getLocation();
+                ChunkAccess.requireLoaded(world, at.getBlockX() >> 4, at.getBlockZ() >> 4);
+                container.update(true, false);
+            }
         }
 
         private void advance() {

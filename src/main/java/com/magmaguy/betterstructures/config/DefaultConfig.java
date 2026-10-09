@@ -47,6 +47,12 @@ public class DefaultConfig extends ConfigurationFile {
     private static boolean protectEliteMobsRegions;
     private static DefaultConfig instance;
     @Getter
+    private static boolean shallowUndergroundScannerEnabled = true;
+    @Getter
+    private static int maxChunkScansPerTick = 2;
+    @Getter
+    private static double chunkScanBudgetMilliseconds = 2.0;
+    @Getter
     private static boolean setupDone;
     @Getter
     private static int modularChunkPastingSpeed = 10;
@@ -113,6 +119,27 @@ public class DefaultConfig extends ConfigurationFile {
 
     @Override
     public void initializeValues() {
+        shallowUndergroundScannerEnabled = ConfigurationEngine.setBoolean(List.of(
+                "Enable only the shallow underground scanner. Other structure types remain enabled."),
+                fileConfiguration, "shallowUndergroundScannerEnabled", true);
+        maxChunkScansPerTick = ConfigurationEngine.setInt(List.of(
+                "Maximum deferred scan/readiness operations started per tick (1-32). Default: 2."),
+                fileConfiguration, "maxChunkScansPerTick", 2);
+        if (maxChunkScansPerTick < 1 || maxChunkScansPerTick > 32) {
+            Logger.warn("Invalid maxChunkScansPerTick; using 2.");
+            maxChunkScansPerTick = 2;
+            fileConfiguration.set("maxChunkScansPerTick", 2);
+        }
+        chunkScanBudgetMilliseconds = ConfigurationEngine.setDouble(List.of(
+                "Time budget in milliseconds for deferred scans each tick (0.1-10). Default: 2.",
+                "Checked between operations; an individual fitting pass may exceed this budget.",
+                "Missing chunks retry with backoff up to 16 checks or 60 seconds; queue limit: 4096, oldest discarded."),
+                fileConfiguration, "chunkScanBudgetMilliseconds", 2.0);
+        if (!Double.isFinite(chunkScanBudgetMilliseconds) || chunkScanBudgetMilliseconds < .1 || chunkScanBudgetMilliseconds > 10) {
+            Logger.warn("Invalid chunkScanBudgetMilliseconds; using 2.");
+            chunkScanBudgetMilliseconds = 2;
+            fileConfiguration.set("chunkScanBudgetMilliseconds", 2.0);
+        }
         lowestYNormalCustom = ConfigurationEngine.setInt(fileConfiguration, "lowestYNormalCustom", -60);
         highestYNormalCustom = ConfigurationEngine.setInt(fileConfiguration, "highestYNormalCustom", 320);
         lowestYNether = ConfigurationEngine.setInt(fileConfiguration, "lowestYNether", 4);

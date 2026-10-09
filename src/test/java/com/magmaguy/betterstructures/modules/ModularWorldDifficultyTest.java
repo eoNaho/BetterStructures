@@ -110,6 +110,8 @@ class ModularWorldDifficultyTest {
                 generated.spawnOtherEntitiesAt(new ModulePasting.InterpretedSign(position, List.of("[pool:modular_difficulty_fixture]")));
             assertTrue(captured.constructed().isEmpty(), "Instance mobs must wait for the completed world's owner to spawn them");
 
+            // The API now refuses implicit loads. The instance owner loads its destinations first.
+            for (Location position : positions) world.getChunkAt(position.getBlockX() >> 4, position.getBlockZ() >> 4);
             List<InstancedBossEntity> spawned = generated.spawnInstancedEntities();
 
             assertEquals(3, spawned.size());
@@ -140,6 +142,7 @@ class ModularWorldDifficultyTest {
         CustomBossesConfigFields previousBoss = bosses.put(bossId, boss);
         Location marker = new Location(world, -120, 16, 41);
         ModularWorld generated = new ModularWorld(world, folder.toFile(), List.of(), new Location(world, 0, 16, 0), 384);
+        world.getChunkAt(marker.getBlockX() >> 4, marker.getBlockZ() >> 4);
         try (var captured = mockConstruction(com.magmaguy.elitemobs.mobconstructor.custombosses.CustomBossEntity.class)) {
             generated.spawnOtherEntitiesAt(new ModulePasting.InterpretedSign(marker, List.of("[pool:center_fixture]")));
             verify(captured.constructed().getFirst()).spawn(new Location(world, -119.5, 16, 41.5), true);

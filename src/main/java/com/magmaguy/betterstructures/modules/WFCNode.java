@@ -1,5 +1,7 @@
 package com.magmaguy.betterstructures.modules;
 
+import com.magmaguy.betterstructures.listeners.DeferredChunkWork;
+import com.magmaguy.betterstructures.util.ChunkFootprint;
 import com.magmaguy.betterstructures.MetadataHandler;
 import com.magmaguy.magmacore.util.Logger;
 import lombok.Getter;
@@ -233,9 +235,12 @@ public class WFCNode {
             @Override
             public void run() {
                 Location adjustedLocation = location.clone().subtract(new Vector(0,textDisplays.size()/2d,0));
+                DeferredChunkWork.submit(new Object(), world.getUID(),
+                        ChunkFootprint.at(adjustedLocation), "debug text", loadedWorld -> {
                 TextDisplay textDisplay = (TextDisplay) world.spawnEntity(adjustedLocation, EntityType.TEXT_DISPLAY);
                 configureTextDisplay(textDisplay, text, color, scale);
                 textDisplays.add(textDisplay);
+                });
             }
         }.runTask(MetadataHandler.PLUGIN);
     }
@@ -286,6 +291,9 @@ public class WFCNode {
         int sizeXZ = wfcGenerator.getModuleGeneratorsConfigFields().getModuleSizeXZ();
         int sizeY = wfcGenerator.getModuleGeneratorsConfigFields().getModuleSizeY();
 
+        DeferredChunkWork.submit(new Object(), world.getUID(),
+                ChunkFootprint.blocks(startLocation.getX(), startLocation.getZ(),
+                        startLocation.getX() + sizeXZ - 1, startLocation.getZ() + sizeXZ - 1), "debug lattice", loadedWorld -> {
         for (int x = 0; x < sizeXZ; x++) {
             for (int y = 0; y < sizeY; y++) {
                 for (int z = 0; z < sizeXZ; z++) {
@@ -304,13 +312,14 @@ public class WFCNode {
 
                     // Place material only if block is on at least 2 edges (true edge/corner)
                     if (edgeCount >= 2) {
-                        blockLocation.getBlock().setType(material);
+                        blockLocation.getBlock().setType(material, false);
                     } else {
-                        blockLocation.getBlock().setType(Material.AIR);
+                        blockLocation.getBlock().setType(Material.AIR, false);
                     }
                 }
             }
         }
+        });
     }
 
     public void debugPaste(Material material) {

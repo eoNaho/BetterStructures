@@ -1,0 +1,2707 @@
+diff --git a/.gitignore b/.gitignore
+index a3eff94..ba21604 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,5 +1,6 @@
+ # Gradle
+ .gradle/
++.validation/
+ build/
+ 
+ # IDE
+diff --git a/build.gradle b/build.gradle
+index 4a50aaa..d62ed94 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -33,7 +33,7 @@ dependencies {
+     }
+     implementation group: 'org.bstats', name: 'bstats-bukkit', version: '3.0.2'
+     implementation group: 'org.joml', name: 'joml', version: '1.10.8'
+-    compileOnly group: 'com.magmaguy', name: 'EliteMobs', version: '10.9.7'
++    compileOnly group: 'com.magmaguy', name: 'EliteMobs', version: '10.9.8'
+     compileOnly group: 'io.lumine', name: 'Mythic-Dist', version: '5.2.1'
+     compileOnly group: 'io.lumine', name: 'MythicLib-dist', version: '1.5.2-SNAPSHOT'
+     compileOnly group: 'net.Indyuce', name: 'MMOItems-API', version: '6.9.2-SNAPSHOT'
+@@ -53,7 +53,7 @@ dependencies {
+     // The cache ticket test exercises the production Clipboard seam without starting Bukkit.
+     testImplementation 'com.sk89q.worldedit:worldedit-core:7.4.2'
+     testImplementation 'com.sk89q.worldedit:worldedit-bukkit:7.4.2'
+-    testImplementation('com.magmaguy:EliteMobs:10.9.7') {
++    testImplementation('com.magmaguy:EliteMobs:10.9.8') {
+         changing = true
+         exclude group: 'org.spigotmc', module: 'spigot-api'
+     }
+diff --git a/src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java b/src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java
+index ffed2d3..56b2f68 100644
+--- a/src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java
++++ b/src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java
+@@ -56,7 +56,8 @@ public class BuildPasteCompleteEvent extends Event {
+      * @return The space covered by every block of the pasted schematic.
+      */
+     public BoundingBox getBoundingBox() {
+-        return BoundingBox.of(lowestCorner.getBlock(), highestCorner.getBlock());
++        return new BoundingBox(lowestCorner.getBlockX(), lowestCorner.getBlockY(), lowestCorner.getBlockZ(),
++                highestCorner.getBlockX() + 1D, highestCorner.getBlockY() + 1D, highestCorner.getBlockZ() + 1D);
+     }
+ 
+     /**
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java
+index 54c372c..fb687b0 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.buildingfitter;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
+ import com.magmaguy.betterstructures.config.DefaultConfig;
+ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+@@ -19,12 +20,12 @@ public class FitAirBuilding extends FitAnything {
+         super.structureType = GeneratorConfigFields.StructureType.SKY;
+         this.schematicContainer = schematicContainer;
+         this.schematicClipboard = schematicContainer.getClipboard();
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     public FitAirBuilding(Chunk chunk) {
+         super.structureType = GeneratorConfigFields.StructureType.SKY;
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     private void scan(Chunk chunk) {
+@@ -43,7 +44,9 @@ public class FitAirBuilding extends FitAnything {
+                 altitude = ThreadLocalRandom.current().nextInt(DefaultConfig.getEndAirBuildMinAltitude(), DefaultConfig.getEndAirBuildMaxAltitude() + 1);
+                 break;
+         }
+-        Location originalLocation = chunk.getWorld().getHighestBlockAt(chunk.getX() * 16 + 8, chunk.getZ() * 16 + 8).getLocation().add(new Vector(0, altitude, 0));
++        Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16 + 8, 0, chunk.getZ() * 16 + 8);
++
++        originalLocation.setY(ChunkAccess.highestY(originalLocation) + altitude);
+ 
+         switch (chunk.getWorld().getEnvironment()) {
+             case CUSTOM:
+@@ -109,6 +112,10 @@ public class FitAirBuilding extends FitAnything {
+         }
+         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
+ 
++        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
++    }
++
++    private void finishScan(Location originalLocation) {
+         chunkScan(originalLocation, 0, 0);
+         if (location == null)
+             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java
+index 40583a9..0ef7052 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java
+@@ -15,6 +15,9 @@ import com.magmaguy.betterstructures.thirdparty.EliteMobs;
+ import com.magmaguy.betterstructures.thirdparty.MythicMobs;
+ import com.magmaguy.betterstructures.thirdparty.WorldGuard;
+ import com.magmaguy.betterstructures.util.SurfaceMaterials;
++import com.magmaguy.betterstructures.util.ChunkAccess;
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import com.magmaguy.betterstructures.listeners.DeferredChunkWork;
+ import com.magmaguy.betterstructures.worldedit.Schematic;
+ import com.magmaguy.betterstructures.worldedit.PasteChunkReadiness;
+ import com.sk89q.worldedit.EditSession;
+@@ -74,6 +77,24 @@ public class FitAnything {
+     public FitAnything() {
+     }
+ 
++    protected void initializeWhenLoaded(Chunk chunk, java.util.function.Consumer<Chunk> scan) {
++        int x = chunk.getX(), z = chunk.getZ();
++        DeferredChunkWork.submit(new Object(), chunk.getWorld().getUID(), new ChunkFootprint(x, z, x, z),
++                "initialize " + structureType + " at " + x + "," + z,
++                world -> scan.accept(ChunkAccess.loadedChunk(world, x, z)));
++    }
++
++    protected void fitWhenLoaded(Location anchor, Runnable fit) {
++        // Union of every candidate footprint, including the original height/biome column.
++        // Only X/Z matter: every topology and underground probe is vertical.
++        double minX = Math.min(anchor.getX(), anchor.getX() + schematicOffset.getX() - searchRadius * 16);
++        double minZ = Math.min(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() - searchRadius * 16);
++        double maxX = Math.max(anchor.getX(), anchor.getX() + schematicOffset.getX() + searchRadius * 16 + schematicClipboard.getDimensions().x() - 1);
++        double maxZ = Math.max(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() + searchRadius * 16 + schematicClipboard.getDimensions().z() - 1);
++        DeferredChunkWork.submit(new Object(), anchor.getWorld().getUID(), ChunkFootprint.blocks(minX, minZ, maxX, maxZ),
++                "fit " + structureType + " at " + anchor.getBlockX() + "," + anchor.getBlockZ(), world -> fit.run());
++    }
++
+     public static void commandBasedCreation(Chunk chunk, GeneratorConfigFields.StructureType structureType, SchematicContainer container) {
+         switch (structureType) {
+             case SKY:
+@@ -108,6 +129,7 @@ public class FitAnything {
+         BuildPlaceEvent buildPlaceEvent = new BuildPlaceEvent(this);
+         Bukkit.getServer().getPluginManager().callEvent(buildPlaceEvent);
+         if (buildPlaceEvent.isCancelled()) return;
++        if (com.magmaguy.betterstructures.BetterStructures.isReloading()) return;
+ 
+         Schematic.enqueue(new Preparation(location.clone()));
+     }
+@@ -163,6 +185,7 @@ public class FitAnything {
+             if (z >= schematicClipboard.getDimensions().z()) { z = 0; x += scanStep; }
+             if (x >= schematicClipboard.getDimensions().x()) { x = 0; phase++; }
+         }
++        @Override public java.util.UUID worldId() { return base.getWorld().getUID(); }
+         @Override public void close() { chunks.close(); }
+         @Override public void onComplete() {
+             setDefaultPedestalMaterial(base);
+@@ -257,6 +280,7 @@ public class FitAnything {
+             try { entityCopy.apply(nextProp); }
+             catch (com.sk89q.worldedit.WorldEditException failure) { throw new IllegalStateException("Could not paste structure entity", failure); }
+         }
++        @Override public java.util.UUID worldId() { return base.getWorld().getUID(); }
+         @Override public void close() {
+             try { if (entitySession != null) entitySession.close(); }
+             finally { chunks.close(); }
+@@ -318,7 +342,7 @@ public class FitAnything {
+         for (int y = -1; y > -11; y--) {
+             Block block = corner.clone().add(x, y, z).getBlock();
+             if (!SurfaceMaterials.ignorable(block.getType())) break;
+-            block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()));
++            block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()), false);
+         }
+     }
+ 
+@@ -326,7 +350,7 @@ public class FitAnything {
+         for (int y = 0; y < 31; y++) {
+             Block block = corner.clone().add(x, schematicClipboard.getDimensions().y() + 1 + y, z).getBlock();
+             if (!SurfaceMaterials.ignorable(block.getType()) || block.getType().isAir()) break;
+-            block.setType(Material.AIR);
++            block.setType(Material.AIR, false);
+         }
+     }
+ 
+@@ -359,13 +383,14 @@ public class FitAnything {
+             ChestFillEvent chestFillEvent = new ChestFillEvent(container, contents.getTreasureConfigFields().getFilename());
+             Bukkit.getServer().getPluginManager().callEvent(chestFillEvent);
+             if (!chestFillEvent.isCancelled()) {
+-                container.update(true);
++                ChunkAccess.requireLoaded(chestLocation.getWorld(), chestLocation.getBlockX() >> 4, chestLocation.getBlockZ() >> 4);
++                container.update(true, false);
+             }
+     }
+ 
+     private void spawnVanilla(Vector entityPosition) {
+             Location signLocation = LocationProjector.project(location, schematicOffset, entityPosition).clone();
+-            signLocation.getBlock().setType(Material.AIR);
++            signLocation.getBlock().setType(Material.AIR, false);
+             //If mobs spawn in corners they might choke on adjacent walls
+             signLocation.add(new Vector(0.5, 0, 0.5));
+             Entity entity = signLocation.getWorld().spawnEntity(signLocation, schematicContainer.getVanillaSpawns().get(entityPosition));
+@@ -383,7 +408,7 @@ public class FitAnything {
+ 
+     private void spawnElite(Vector elitePosition) {
+             Location eliteLocation = LocationProjector.project(location, schematicOffset, elitePosition).clone();
+-            eliteLocation.getBlock().setType(Material.AIR);
++            eliteLocation.getBlock().setType(Material.AIR, false);
+             eliteLocation.add(new Vector(0.5, 0, 0.5));
+             String bossFilename = schematicContainer.getEliteMobsSpawns().get(elitePosition);
+             //If the spawn fails then don't continue
+@@ -405,14 +430,14 @@ public class FitAnything {
+     /** The sign is removed first so a listener can place blocks at the marker. */
+     private void announceCustomMarker(Vector position) {
+         Location markerLocation = LocationProjector.project(location, schematicOffset, position).clone();
+-        markerLocation.getBlock().setType(Material.AIR);
++        markerLocation.getBlock().setType(Material.AIR, false);
+         Bukkit.getServer().getPluginManager().callEvent(
+                 new BuildCustomMarkerEvent(this, markerLocation, schematicContainer.getCustomMarkers().get(position)));
+     }
+ 
+     private void spawnMythic(Vector position) {
+             Location mobLocation = LocationProjector.project(location, schematicOffset, position).clone();
+-            mobLocation.getBlock().setType(Material.AIR);
++            mobLocation.getBlock().setType(Material.AIR, false);
+ 
+             //If the spawn fails then don't continue
+             if (!MythicMobs.Spawn(mobLocation, schematicContainer.getMythicMobsSpawns().get(position)))
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java
+index 99282ff..e71be04 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.buildingfitter;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
+ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+ import com.magmaguy.betterstructures.schematics.SchematicContainer;
+@@ -17,13 +18,13 @@ public class FitLiquidBuilding extends FitAnything {
+         super.structureType = GeneratorConfigFields.StructureType.LIQUID_SURFACE;
+         this.schematicContainer = schematicContainer;
+         this.schematicClipboard = schematicContainer.getClipboard();
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     public FitLiquidBuilding(Chunk chunk) {
+         super();
+         super.structureType = GeneratorConfigFields.StructureType.LIQUID_SURFACE;
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     private void scan(Chunk chunk) {
+@@ -31,7 +32,7 @@ public class FitLiquidBuilding extends FitAnything {
+         //The 8 offset on x and y is to center the anchor on the chunk
+         Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16D, 0, chunk.getZ() * 16D).add(new Vector(8, 0, 8));
+         //This gets the location of the highest solid block
+-        originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));
++        originalLocation.setY(ChunkAccess.highestY(originalLocation));
+ 
+         switch (chunk.getWorld().getEnvironment()) {
+             case CUSTOM:
+@@ -57,6 +58,10 @@ public class FitLiquidBuilding extends FitAnything {
+         }
+         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
+ 
++        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
++    }
++
++    private void finishScan(Location originalLocation) {
+         chunkScan(originalLocation, 0, 0);
+         if (highestScore < 90)
+             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java
+index 0825ef0..3458ea0 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.buildingfitter;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
+ import com.magmaguy.betterstructures.buildingfitter.util.Topology;
+ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+@@ -18,20 +19,20 @@ public class FitSurfaceBuilding extends FitAnything {
+         super.structureType = GeneratorConfigFields.StructureType.SURFACE;
+         this.schematicContainer = schematicContainer;
+         this.schematicClipboard = schematicContainer.getClipboard();
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     public FitSurfaceBuilding(Chunk chunk) {
+         super();
+         super.structureType = GeneratorConfigFields.StructureType.SURFACE;
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     private void scan(Chunk chunk) {
+         //Note about the adjustments:
+         //The 8 offset on x and y is to center the anchor on the chunk
+         Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16D, 0, chunk.getZ() * 16D).add(new Vector(8, 0, 8));
+-        originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));
++        originalLocation.setY(ChunkAccess.highestY(originalLocation));
+         randomizeSchematicContainer(originalLocation, GeneratorConfigFields.StructureType.SURFACE);
+         if (schematicClipboard == null) {
+             //Bukkit.getLogger().info("Did not spawn structure in biome " + originalLocation.getBlock().getBiome() + " because no valid schematics exist for it.");
+@@ -39,6 +40,10 @@ public class FitSurfaceBuilding extends FitAnything {
+         }
+         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
+ 
++        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
++    }
++
++    private void finishScan(Location originalLocation) {
+         chunkScan(originalLocation, 0, 0);
+         if (highestScore < 50)
+             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java
+index 708ba16..5d554b7 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java
+@@ -26,7 +26,7 @@ public class FitUndergroundBuilding extends FitAnything {
+         this.highestY = highestY;
+         this.schematicContainer = schematicContainer;
+         this.schematicClipboard = schematicContainer.getClipboard();
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     public FitUndergroundBuilding(Chunk chunk, int lowestY, int highestY, GeneratorConfigFields.StructureType structureType) {
+@@ -34,7 +34,7 @@ public class FitUndergroundBuilding extends FitAnything {
+         super.structureType = structureType;
+         this.lowestY = lowestY;
+         this.highestY = highestY;
+-        scan(chunk);
++        initializeWhenLoaded(chunk, this::scan);
+     }
+ 
+     private void scan(Chunk chunk) {
+@@ -134,6 +134,10 @@ public class FitUndergroundBuilding extends FitAnything {
+                 break;
+         }
+ 
++        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
++    }
++
++    private void finishScan(Location originalLocation) {
+         chunkScan(originalLocation, 0, 0);
+         if (highestScore < 90)
+             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java
+index c972f87..ee3eace 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.buildingfitter.util;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+ import com.magmaguy.betterstructures.schematics.SchematicContainer;
+ import com.magmaguy.betterstructures.util.WeighedProbability;
+@@ -19,7 +20,7 @@ public class SchematicPicker {
+         if (schematicContainers.isEmpty()) return null;
+         String worldName = naiveAnchorLocation.getWorld().getName();
+         World.Environment environment = naiveAnchorLocation.getWorld().getEnvironment();
+-        Object biome = naiveAnchorLocation.getBlock().getBiome();
++        Object biome = ChunkAccess.block(naiveAnchorLocation).getBiome();
+         int blockY = naiveAnchorLocation.getBlockY();
+         schematicContainers.removeIf(schematicContainer ->
+                 !schematicContainer.isValidWorld(worldName) ||
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java
+index e63e248..1ae19f2 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java
+@@ -1,5 +1,7 @@
+ package com.magmaguy.betterstructures.buildingfitter.util;
+ 
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.util.SurfaceMaterials;
+ import com.magmaguy.betterstructures.util.WorldEditUtils;
+ import com.sk89q.worldedit.extent.clipboard.Clipboard;
+@@ -22,6 +24,12 @@ public class TerrainAdequacy {
+         int depth = schematicClipboard.getDimensions().z();
+         int height = schematicClipboard.getDimensions().y();
+ 
++        if (!ChunkFootprint.blocks(
++                iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
++                iteratedLocation.getX() + schematicOffset.getX() + width - 1,
++                iteratedLocation.getZ() + schematicOffset.getZ() + depth - 1).isLoaded(iteratedLocation.getWorld()))
++            throw new IllegalStateException("Terrain footprint is not loaded");
++
+         //Clipboard reads are absolute: the region spans [minimumPoint, maximumPoint], and reads
+         //outside it silently return air. Zero-based coordinates must be offset by the minimum
+         //point, the same way SchematicContainer and Schematic read clipboards.
+@@ -52,7 +60,7 @@ public class TerrainAdequacy {
+ 
+     private static boolean isBlockAdequate(Location projectedWorldLocation, boolean schematicBlockIsAir, boolean schematicBlockIsLiquid, int floorHeight, ScanType scanType) {
+         int floorYValue = projectedWorldLocation.getBlockY();
+-        Material terrain = projectedWorldLocation.getBlock().getType();
++        Material terrain = ChunkAccess.block(projectedWorldLocation).getType();
+         if (terrain == Material.VOID_AIR) return false;
+         switch (scanType) {
+             case SURFACE:
+diff --git a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java
+index 5177cb6..95ec029 100644
+--- a/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java
++++ b/src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java
+@@ -1,5 +1,7 @@
+ package com.magmaguy.betterstructures.buildingfitter.util;
+ 
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.util.SurfaceMaterials;
+ import com.sk89q.worldedit.extent.clipboard.Clipboard;
+ import org.bukkit.Bukkit;
+@@ -18,6 +20,12 @@ public class Topology {
+         int width = schematicClipboard.getDimensions().x();
+         int depth = schematicClipboard.getDimensions().z();
+ 
++        if (!ChunkFootprint.blocks(
++                iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
++                iteratedLocation.getX() + schematicOffset.getX() + width - 1,
++                iteratedLocation.getZ() + schematicOffset.getZ() + depth - 1).isLoaded(iteratedLocation.getWorld()))
++            throw new IllegalStateException("Terrain footprint is not loaded");
++
+         ArrayList<Integer> heights = new ArrayList<>();
+ 
+         //Scans the topology to find a mesh of the highest locations for the entirety of the x and z axi. Also does the water / lava scan
+@@ -73,7 +81,8 @@ public class Topology {
+ 
+     private static Location getHighestBlockAt(Location location) {
+         if (!location.getWorld().getEnvironment().equals(World.Environment.NETHER))
+-            return location.getWorld().getHighestBlockAt(location).getLocation();
++            return new Location(location.getWorld(), location.getBlockX(),
++                    ChunkAccess.highestY(location), location.getBlockZ());
+         else {
+             //This is middle point for the height in the Nether
+             location.setY(63);
+diff --git a/src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java b/src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java
+index d868064..044f012 100644
+--- a/src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java
++++ b/src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.commands;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.BetterStructures;
+ import com.magmaguy.betterstructures.buildingfitter.FitAnything;
+ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+@@ -62,7 +63,8 @@ public class PlaceCommand extends AdvancedCommand {
+                 player.sendMessage("[BetterStructures] Failed to get valid schematic type!");
+                 return;
+             }
+-            FitAnything.commandBasedCreation(player.getLocation().getChunk(), structureType, commandSchematicContainer);
++            FitAnything.commandBasedCreation(ChunkAccess.loadedChunk(player.getWorld(),
++                    player.getLocation().getBlockX() >> 4, player.getLocation().getBlockZ() >> 4), structureType, commandSchematicContainer);
+             player.sendMessage("[BetterStructures] Attempted to place " + schematicFile + " !");
+         } catch (Exception ex) {
+             player.sendMessage("[BetterStructures] Invalid schematic!");
+diff --git a/src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java b/src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java
+index 45de411..a352eba 100644
+--- a/src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java
++++ b/src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java
+@@ -49,7 +49,7 @@ public class PregenerateCommand extends AdvancedCommand {
+                 center = commandData.getPlayerSender().getLocation();
+                 break;
+             case "WORLD_CENTER":
+-                center = new Location(world, 0, world.getHighestBlockYAt(0, 0), 0);
++                center = new Location(world, 0, 0, 0);
+                 break;
+             case "WORLD_SPAWN":
+                 center = world.getSpawnLocation();
+diff --git a/src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java b/src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java
+index a549aef..56f514f 100644
+--- a/src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java
++++ b/src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java
+@@ -32,7 +32,15 @@ public class TeleportCommand extends AdvancedCommand {
+             double x = Double.parseDouble(commandData.getStringArgument("x"));
+             double y = Double.parseDouble(commandData.getStringArgument("y"));
+             double z = Double.parseDouble(commandData.getStringArgument("z"));
+-            commandData.getPlayerSender().teleport(new Location(world, x, y, z));
++            var player = commandData.getPlayerSender();
++            @SuppressWarnings("unchecked")
++            var future = (java.util.concurrent.CompletableFuture<Boolean>) player.getClass()
++                    .getMethod("teleportAsync", Location.class).invoke(player, new Location(world, x, y, z));
++            future.orTimeout(60, java.util.concurrent.TimeUnit.SECONDS).exceptionally(failure -> {
++                // Timeout completion can run off-thread. Only the thread-safe logger is used here.
++                com.magmaguy.betterstructures.MetadataHandler.PLUGIN.getLogger().warning("Asynchronous teleport failed: " + failure);
++                return false;
++            });
+         } catch (Exception ex) {
+             Logger.sendMessage(commandData.getCommandSender(), "Failed to teleport to location because the location wasn't valid!");
+         }
+diff --git a/src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java b/src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java
+index 95d8c2b..2e16803 100644
+--- a/src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java
++++ b/src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java
+@@ -47,6 +47,12 @@ public class DefaultConfig extends ConfigurationFile {
+     private static boolean protectEliteMobsRegions;
+     private static DefaultConfig instance;
+     @Getter
++    private static boolean shallowUndergroundScannerEnabled = true;
++    @Getter
++    private static int maxChunkScansPerTick = 2;
++    @Getter
++    private static double chunkScanBudgetMilliseconds = 2.0;
++    @Getter
+     private static boolean setupDone;
+     @Getter
+     private static int modularChunkPastingSpeed = 10;
+@@ -113,6 +119,27 @@ public class DefaultConfig extends ConfigurationFile {
+ 
+     @Override
+     public void initializeValues() {
++        shallowUndergroundScannerEnabled = ConfigurationEngine.setBoolean(List.of(
++                "Enable only the shallow underground scanner. Other structure types remain enabled."),
++                fileConfiguration, "shallowUndergroundScannerEnabled", true);
++        maxChunkScansPerTick = ConfigurationEngine.setInt(List.of(
++                "Maximum deferred scan/readiness operations started per tick (1-32). Default: 2."),
++                fileConfiguration, "maxChunkScansPerTick", 2);
++        if (maxChunkScansPerTick < 1 || maxChunkScansPerTick > 32) {
++            Logger.warn("Invalid maxChunkScansPerTick; using 2.");
++            maxChunkScansPerTick = 2;
++            fileConfiguration.set("maxChunkScansPerTick", 2);
++        }
++        chunkScanBudgetMilliseconds = ConfigurationEngine.setDouble(List.of(
++                "Time budget in milliseconds for deferred scans each tick (0.1-10). Default: 2.",
++                "Checked between operations; an individual fitting pass may exceed this budget.",
++                "Missing chunks retry with backoff up to 16 checks or 60 seconds; queue limit: 4096, oldest discarded."),
++                fileConfiguration, "chunkScanBudgetMilliseconds", 2.0);
++        if (!Double.isFinite(chunkScanBudgetMilliseconds) || chunkScanBudgetMilliseconds < .1 || chunkScanBudgetMilliseconds > 10) {
++            Logger.warn("Invalid chunkScanBudgetMilliseconds; using 2.");
++            chunkScanBudgetMilliseconds = 2;
++            fileConfiguration.set("chunkScanBudgetMilliseconds", 2.0);
++        }
+         lowestYNormalCustom = ConfigurationEngine.setInt(fileConfiguration, "lowestYNormalCustom", -60);
+         highestYNormalCustom = ConfigurationEngine.setInt(fileConfiguration, "highestYNormalCustom", 320);
+         lowestYNether = ConfigurationEngine.setInt(fileConfiguration, "lowestYNether", 4);
+diff --git a/src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java b/src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java
+index 8fc209e..d97cf19 100644
+--- a/src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java
++++ b/src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java
+@@ -1,9 +1,9 @@
+ package com.magmaguy.betterstructures.listeners;
+ 
+ /**
+- * Suppresses nested chunk scans caused by terrain lookups or block placement.
+- * A nested new-chunk event is a side effect of BetterStructures' own scan; replaying
+- * it later can recursively fan out across every neighboring chunk.
++ * Prevents nested drains, including those triggered by third-party event listeners.
++ * Chunk events only enqueue work now; our reads never enter managedBlock. Retain
++ * the guard as defense against callbacks that execute scheduler work recursively.
+  */
+ final class ChunkScanReentrancyGuard {
+ 
+diff --git a/src/main/java/com/magmaguy/betterstructures/listeners/DeferredChunkWork.java b/src/main/java/com/magmaguy/betterstructures/listeners/DeferredChunkWork.java
+new file mode 100644
+index 0000000..5dec94f
+--- /dev/null
++++ b/src/main/java/com/magmaguy/betterstructures/listeners/DeferredChunkWork.java
+@@ -0,0 +1,70 @@
++package com.magmaguy.betterstructures.listeners;
++
++import com.magmaguy.betterstructures.BetterStructures;
++import com.magmaguy.betterstructures.MetadataHandler;
++import com.magmaguy.betterstructures.config.DefaultConfig;
++import com.magmaguy.betterstructures.util.ChunkAccess;
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import com.magmaguy.betterstructures.util.DeferredWorkQueue;
++import org.bukkit.Bukkit;
++import org.bukkit.World;
++import org.bukkit.scheduler.BukkitTask;
++
++import java.util.UUID;
++import java.util.function.Consumer;
++
++/** Shared budget for chunk events, fitter initialization and footprint continuations. */
++public final class DeferredChunkWork {
++    private static final DeferredWorkQueue<Object, Work> queue = new DeferredWorkQueue<>(4096);
++    private static final ChunkScanReentrancyGuard guard = new ChunkScanReentrancyGuard();
++    private static BukkitTask task;
++    private static long tick;
++    private record Work(UUID worldId, ChunkFootprint footprint, String description, Consumer<World> action) { }
++
++    private DeferredChunkWork() { }
++
++    public static void submit(Object key, UUID worldId, ChunkFootprint footprint, String description, Consumer<World> action) {
++        ChunkAccess.requireMainThread();
++        queue.add(key, new Work(worldId, footprint, description, action), tick, System.nanoTime(), DeferredChunkWork::warn);
++        start();
++    }
++
++    public static void start() {
++        if (task != null || queue.isEmpty() || MetadataHandler.PLUGIN == null || !MetadataHandler.PLUGIN.isEnabled()) return;
++        task = Bukkit.getScheduler().runTaskTimer(MetadataHandler.PLUGIN, DeferredChunkWork::drain, 1L, 1L);
++    }
++
++    private static void drain() {
++        if (guard.isActive()) return;
++        tick++;
++        if (BetterStructures.isReloading()) return;
++        long deadline = System.nanoTime() + (long) (DefaultConfig.getChunkScanBudgetMilliseconds() * 1_000_000);
++        queue.drain(tick, System.nanoTime(), DefaultConfig.getMaxChunkScansPerTick(),
++                work -> {
++                    World world = Bukkit.getWorld(work.worldId());
++                    return world != null && work.footprint().isLoaded(world) && !guard.isActive();
++                }, work -> {
++                    try { guard.runIfIdle(() -> work.action().accept(Bukkit.getWorld(work.worldId()))); }
++                    catch (RuntimeException failure) {
++                        warn(work);
++                        MetadataHandler.PLUGIN.getLogger().warning("Deferred operation failed: " + failure);
++                    }
++                }, DeferredChunkWork::warn, () -> System.nanoTime() < deadline);
++        if (queue.isEmpty()) clear();
++    }
++
++    private static void warn(Work work) {
++        World world = Bukkit.getWorld(work.worldId());
++        MetadataHandler.PLUGIN.getLogger().warning("Discarded chunk operation (queue limit, timeout, attempts or failure): "
++                + work.description() + " world=" + (world == null ? work.worldId() : world.getName())
++                + " chunks=" + work.footprint());
++    }
++
++    public static void discardWorld(UUID id) { queue.removeIf(work -> work.worldId().equals(id)); }
++
++    public static void clear() {
++        if (task != null) task.cancel();
++        task = null;
++        queue.clear();
++    }
++}
+diff --git a/src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java b/src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java
+index ad2ed18..3489ed1 100644
+--- a/src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java
++++ b/src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java
+@@ -1,7 +1,7 @@
+ package com.magmaguy.betterstructures.listeners;
+ 
+-import com.magmaguy.betterstructures.BetterStructures;
+-import com.magmaguy.betterstructures.MetadataHandler;
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.buildingfitter.FitAirBuilding;
+ import com.magmaguy.betterstructures.buildingfitter.FitLiquidBuilding;
+ import com.magmaguy.betterstructures.buildingfitter.FitSurfaceBuilding;
+@@ -13,6 +13,7 @@ import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
+ import com.magmaguy.betterstructures.config.modulegenerators.ModuleGeneratorsConfig;
+ import com.magmaguy.betterstructures.config.modulegenerators.ModuleGeneratorsConfigFields;
+ import com.magmaguy.betterstructures.modules.WFCGenerator;
++import com.magmaguy.betterstructures.util.ChunkPregenerator;
+ import com.magmaguy.betterstructures.modules.NaturalDungeonReservation;
+ import com.magmaguy.betterstructures.schematics.SchematicContainer;
+ import com.magmaguy.betterstructures.thirdparty.WorldGuard;
+@@ -24,199 +25,69 @@ import org.bukkit.event.EventHandler;
+ import org.bukkit.event.EventPriority;
+ import org.bukkit.event.Listener;
+ import org.bukkit.event.world.ChunkLoadEvent;
+-import org.bukkit.scheduler.BukkitRunnable;
+-import org.bukkit.scheduler.BukkitTask;
+ 
+ import java.util.ArrayList;
+-import java.util.HashSet;
+-import java.util.LinkedHashSet;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Random;
+-import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.ThreadLocalRandom;
+ import java.util.concurrent.TimeUnit;
+ 
+ public class NewChunkLoadEvent implements Listener {
+ 
+-    private static final Set<LoadingChunkKey> loadingChunks = new HashSet<>();
+-    // Terrain lookups must run after the chunk-load callback has returned. The
+-    // same queue also retains scans across content reloads. Store coordinates
+-    // rather than Chunk/World references so deferred work cannot pin worlds.
+-    private static final Set<LoadingChunkKey> deferredNewChunks = new LinkedHashSet<>();
+-    private static final DelayedDungeonScanTracker<LoadingChunkKey> delayedDungeonScans =
+-            new DelayedDungeonScanTracker<>();
+     private static final Map<LoadingChunkKey, Long> recentlyGeneratedChunks = new LinkedHashMap<>();
+     private static final long RECENT_NEW_CHUNK_NANOS = TimeUnit.MINUTES.toNanos(2);
+     private static final int MAX_RECENT_NEW_CHUNKS = 65_536;
+-    private static final ChunkScanReentrancyGuard chunkScanReentrancyGuard = new ChunkScanReentrancyGuard();
+-    private static final int MAX_DEFERRED_SCANS_PER_DRAIN = 32;
+-    private static final long MAX_DEFERRED_SCAN_NANOS = 5_000_000L;
+-    private static BukkitTask deferredDrainTask;
+-    private static int remainingNewInspections;
+-    private static int remainingDungeonInspections;
+ 
+     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+     public void onChunkLoad(ChunkLoadEvent event) {
+-        Chunk chunk = event.getChunk();
+-        LoadingChunkKey loadingChunkKey = LoadingChunkKey.from(chunk);
+-        if (event.isNewChunk()) rememberGeneratedChunk(loadingChunkKey);
+-        boolean deferred = deferredNewChunks.contains(loadingChunkKey);
+-        boolean deferredDungeon = delayedDungeonScans.isDeferred(loadingChunkKey);
+-
+-        if (BetterStructures.isReloading()) {
+-            if (event.isNewChunk()) deferredNewChunks.add(loadingChunkKey);
+-            return;
+-        }
+-        // A deferred chunk may have unloaded before its scan could run. Its
+-        // later load is no longer reported as "new", but it still needs the one
+-        // generation scan that was postponed by the reload gate.
+-        if (!event.isNewChunk() && !deferred) {
+-            if (deferredDungeon) {
+-                delayedDungeonScans.removeDeferred(loadingChunkKey);
+-                scheduleDungeonScanner(loadingChunkKey);
+-            }
+-            return;
+-        }
+-
+-        if (chunkScanReentrancyGuard.isActive()) {
+-            // A terrain read can load neighboring chunks. Do not enqueue those
+-            // side effects: replaying them would recursively expand generation.
+-            // Previously queued work still needs a drain now that it is loaded.
+-            if (deferred) scheduleDeferredDrain();
+-            return;
+-        }
+-        deferredNewChunks.add(loadingChunkKey);
+-        scheduleDeferredDrain();
++        if (!event.isNewChunk()) return;
++        LoadingChunkKey key = LoadingChunkKey.from(event.getChunk());
++        purgeExpiredGeneratedChunks();
++        if (recentlyGeneratedChunks.containsKey(key)) return;
++        rememberGeneratedChunk(key);
++        DeferredChunkWork.submit(key, key.worldId(),
++                new ChunkFootprint(key.x(), key.z(), key.x(), key.z()),
++                "new chunk " + key.x() + "," + key.z(),
++                world -> scanNewChunk(ChunkAccess.loadedChunk(world, key.x(), key.z()), key));
+     }
+ 
+-    private static void scanNewChunk(Chunk chunk, LoadingChunkKey loadingChunkKey) {
++    private static void scanNewChunk(Chunk chunk, LoadingChunkKey key) {
+         if (!ValidWorldsConfig.isValidWorld(chunk.getWorld())) return;
+-        if (loadingChunks.contains(loadingChunkKey)) return;
+-        //In some cases the same chunk gets loaded (at least at an event level) several times, this prevents the plugin from doing multiple scans and placing multiple builds, enhancing performance
+-        loadingChunks.add(loadingChunkKey);
+-        new BukkitRunnable() {
+-            @Override
+-            public void run() {
+-                loadingChunks.remove(loadingChunkKey);
+-            }
+-        }.runTaskLater(MetadataHandler.PLUGIN, 20L);
+-
+         surfaceScanner(chunk);
+         shallowUndergroundScanner(chunk);
+         deepUndergroundScanner(chunk);
+         skyScanner(chunk);
+         liquidSurfaceScanner(chunk);
+-        scheduleDungeonScanner(loadingChunkKey);
++        scheduleDungeonScanner(key);
+     }
+ 
+     public static void prepareForContentReload() {
+-        cancelDeferredDrain();
+-        delayedDungeonScans.deferAllPending();
+-        loadingChunks.clear();
+-    }
+-
+-    /**
+-     * Schedules a bounded replay of deferred chunks that are still loaded
+-     * without force-loading worlds or chunks. Unloaded coordinates stay queued
+-     * and are consumed by their next ordinary ChunkLoadEvent.
+-     */
+-    public static void replayDeferredNewChunks() {
+-        scheduleDeferredDrain();
+-    }
+-
+-    private static void scheduleDeferredDrain() {
+-        scheduleDeferredDrain(true);
+-    }
+-
+-    private static void scheduleDeferredDrain(boolean wakeup) {
+-        if (wakeup) {
+-            remainingNewInspections = deferredNewChunks.size();
+-            remainingDungeonInspections = delayedDungeonScans.deferredSize();
+-        }
+-        if (BetterStructures.isReloading()
+-                || (deferredNewChunks.isEmpty() && !delayedDungeonScans.hasDeferred())
+-                || deferredDrainTask != null || MetadataHandler.PLUGIN == null
+-                || !MetadataHandler.PLUGIN.isEnabled()) return;
+-
+-        deferredDrainTask = Bukkit.getScheduler().runTaskLater(
+-                MetadataHandler.PLUGIN,
+-                () -> {
+-                    deferredDrainTask = null;
+-                    drainDeferredNewChunks();
+-                },
+-                1L);
+-    }
+-
+-    private static void drainDeferredNewChunks() {
+-        if (BetterStructures.isReloading() || MetadataHandler.PLUGIN == null || !MetadataHandler.PLUGIN.isEnabled()) return;
+-        long started = System.nanoTime();
+-        int inspected = 0;
+-        while (remainingNewInspections > 0 && !deferredNewChunks.isEmpty()
+-                && inspected < MAX_DEFERRED_SCANS_PER_DRAIN
+-                && System.nanoTime() - started < MAX_DEFERRED_SCAN_NANOS) {
+-            var iterator = deferredNewChunks.iterator();
+-            LoadingChunkKey key = iterator.next();
+-            iterator.remove();
+-            remainingNewInspections--;
+-            inspected++;
+-            World world = Bukkit.getWorld(key.worldId());
+-            if (world == null || !world.isChunkLoaded(key.x(), key.z())) {
+-                deferredNewChunks.add(key);
+-                continue;
+-            }
+-            try {
+-                Chunk chunk = world.getChunkAt(key.x(), key.z());
+-                if (chunkScanReentrancyGuard.runIfIdle(() -> scanNewChunk(chunk, key))) {
+-                    delayedDungeonScans.removeDeferred(key);
+-                } else {
+-                    deferredNewChunks.add(key);
+-                }
+-            } catch (Throwable failure) {
+-                deferredNewChunks.add(key);
+-                MetadataHandler.PLUGIN.getLogger().warning("Failed deferred chunk scan at " + key + ": " + failure.getMessage());
+-            }
+-        }
+-        while (remainingDungeonInspections > 0 && delayedDungeonScans.hasDeferred()
+-                && inspected < MAX_DEFERRED_SCANS_PER_DRAIN
+-                && System.nanoTime() - started < MAX_DEFERRED_SCAN_NANOS) {
+-            LoadingChunkKey key = delayedDungeonScans.pollDeferred();
+-            remainingDungeonInspections--;
+-            inspected++;
+-            World world = Bukkit.getWorld(key.worldId());
+-            if (deferredNewChunks.contains(key) || world == null || !world.isChunkLoaded(key.x(), key.z())) {
+-                delayedDungeonScans.defer(key);
+-                continue;
+-            }
+-            scheduleDungeonScanner(key);
+-        }
+-        if (deferredNewChunks.isEmpty()) remainingNewInspections = 0;
+-        if (!delayedDungeonScans.hasDeferred()) remainingDungeonInspections = 0;
+-        // Complete at most one bounded traversal per wakeup. Dormant chunks await their next load event.
+-        if (remainingNewInspections > 0 || remainingDungeonInspections > 0) scheduleDeferredDrain(false);
+-    }
+-    private static void cancelDeferredDrain() {
+-        if (deferredDrainTask == null) return;
+-        deferredDrainTask.cancel();
+-        deferredDrainTask = null;
+-    }
+-
+-    public static void discardDeferredNewChunks() {
+-        cancelDeferredDrain();
+-        deferredNewChunks.clear();
+-        delayedDungeonScans.clear();
++        // Fitter continuations refer to the old content. Drop them before replacing it.
++        DeferredChunkWork.clear();
++        recentlyGeneratedChunks.clear();
+     }
+ 
++    public static void replayDeferredNewChunks() { DeferredChunkWork.start(); }
++    public static void discardDeferredNewChunks() { DeferredChunkWork.clear(); }
+     public static void shutdown() {
+-        cancelDeferredDrain();
+-        loadingChunks.clear();
+-        deferredNewChunks.clear();
+-        delayedDungeonScans.clear();
++        DeferredChunkWork.clear();
+         recentlyGeneratedChunks.clear();
+     }
+ 
++    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
++    public void onWorldUnload(org.bukkit.event.world.WorldUnloadEvent event) {
++        UUID id = event.getWorld().getUID();
++        DeferredChunkWork.discardWorld(id);
++        recentlyGeneratedChunks.keySet().removeIf(key -> key.worldId().equals(id));
++        com.magmaguy.betterstructures.worldedit.Schematic.discardWorld(id);
++        ChunkPregenerator.getActivePregenerators().stream()
++                .filter(generator -> generator.getWorld().getUID().equals(id))
++                .forEach(ChunkPregenerator::cancel);
++    }
++
+     private record LoadingChunkKey(UUID worldId, int x, int z) {
+         private static LoadingChunkKey from(Chunk chunk) {
+             return new LoadingChunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ());
+@@ -255,27 +126,15 @@ public class NewChunkLoadEvent implements Listener {
+         return true;
+     }
+ 
+-    private static void scheduleDungeonScanner(LoadingChunkKey loadingChunkKey) {
+-        if (MetadataHandler.PLUGIN == null || !MetadataHandler.PLUGIN.isEnabled()) return;
+-        if (!delayedDungeonScans.markPending(loadingChunkKey)) return;
+-        Bukkit.getScheduler().runTaskLater(MetadataHandler.PLUGIN, () -> {
+-            // A reload moves pending keys to the deferred set before cancelling Bukkit tasks.
+-            // If a task survives that cancellation, it no longer owns this key.
+-            if (!delayedDungeonScans.takePending(loadingChunkKey)) return;
+-            if (BetterStructures.isReloading()) {
+-                delayedDungeonScans.defer(loadingChunkKey);
+-                return;
+-            }
+-            World world = Bukkit.getWorld(loadingChunkKey.worldId());
+-            if (world == null || !world.isChunkLoaded(
+-                    loadingChunkKey.x(), loadingChunkKey.z())) {
+-                delayedDungeonScans.defer(loadingChunkKey);
+-                return;
+-            }
+-            dungeonScanner(world.getChunkAt(loadingChunkKey.x(), loadingChunkKey.z()));
+-        }, 1L);
++    private static void scheduleDungeonScanner(LoadingChunkKey key) {
++        DeferredChunkWork.submit(new DungeonKey(key), key.worldId(),
++                new ChunkFootprint(key.x(), key.z(), key.x(), key.z()),
++                "dungeon scan " + key.x() + "," + key.z(),
++                world -> dungeonScanner(ChunkAccess.loadedChunk(world, key.x(), key.z())));
+     }
+ 
++    private record DungeonKey(LoadingChunkKey chunk) { }
++
+     /**
+      * Determines if the given chunk is a valid structure position based on
+      * a diamond grid pattern with seeded random offsets.
+@@ -353,6 +212,7 @@ public class NewChunkLoadEvent implements Listener {
+     }
+ 
+     private static void shallowUndergroundScanner(Chunk chunk) {
++        if (!DefaultConfig.isShallowUndergroundScannerEnabled()) return;
+         if (SchematicContainer.getSchematics().get(GeneratorConfigFields.StructureType.UNDERGROUND_SHALLOW).isEmpty()) return;
+         if (!isValidStructurePosition(chunk, GeneratorConfigFields.StructureType.UNDERGROUND_SHALLOW,
+                 DefaultConfig.getDistanceShallow(), DefaultConfig.getMaxOffsetShallow())) return;
+@@ -393,16 +253,27 @@ public class NewChunkLoadEvent implements Listener {
+         }
+         if (validatedGenerators.isEmpty()) return;
+         ModuleGeneratorsConfigFields moduleGeneratorsConfigFields = validatedGenerators.get(ThreadLocalRandom.current().nextInt(0, validatedGenerators.size()));
+-        var startLocation = chunk.getBlock(
+-                8, moduleGeneratorsConfigFields.getCenterModuleAltitude(), 8).getLocation();
+-        UUID worldId = chunk.getWorld().getUID();
++        var startLocation = new org.bukkit.Location(chunk.getWorld(), chunk.getX() * 16 + 8,
++                moduleGeneratorsConfigFields.getCenterModuleAltitude(), chunk.getZ() * 16 + 8);
++        var bounds = NaturalDungeonReservation.blockBounds(startLocation.getBlockX(), startLocation.getBlockZ(),
++                moduleGeneratorsConfigFields.getRadius(), moduleGeneratorsConfigFields.getModuleSizeXZ());
++        var footprint = new ChunkFootprint(
++                bounds.minChunkX(), bounds.minChunkZ(), bounds.maxChunkX(), bounds.maxChunkZ());
++        DeferredChunkWork.submit(new Object(), chunk.getWorld().getUID(), footprint, "natural dungeon footprint",
++                world -> finishDungeonScan(world, startLocation, moduleGeneratorsConfigFields, footprint));
++    }
++
++    private static void finishDungeonScan(World world, org.bukkit.Location startLocation,
++                                         ModuleGeneratorsConfigFields moduleGeneratorsConfigFields,
++                                         ChunkFootprint footprint) {
++        UUID worldId = world.getUID();
+         var reservation = NaturalDungeonReservation.tryCreate(
+                 startLocation.getBlockX(),
+                 startLocation.getBlockZ(),
+                 moduleGeneratorsConfigFields.getRadius(),
+                 moduleGeneratorsConfigFields.getModuleSizeXZ(),
+                 DefaultConfig.getSpawnProtectionRadius(),
+-                coordinate -> chunk.getWorld().isChunkGenerated(coordinate.x(), coordinate.z()),
++                coordinate -> ChunkAccess.generatedIfLoaded(world, coordinate.x(), coordinate.z()),
+                 coordinate -> wasRecentlyGenerated(worldId, coordinate));
+         if (reservation.isEmpty()) {
+             Logger.info("Skipped natural modular generation because its full footprint overlaps "
+@@ -411,7 +282,7 @@ public class NewChunkLoadEvent implements Listener {
+         }
+ 
+         NaturalDungeonReservation naturalReservation = reservation.get();
+-        if (hasWorldGuardOverlap(chunk.getWorld(), naturalReservation.blockBounds())) {
++        if (hasWorldGuardOverlap(world, naturalReservation.blockBounds())) {
+             Logger.info("Skipped natural modular generation because its full footprint overlaps "
+                     + "a WorldGuard region.");
+             return;
+@@ -420,9 +291,10 @@ public class NewChunkLoadEvent implements Listener {
+         WFCGenerator.generateNaturally(
+                 moduleGeneratorsConfigFields,
+                 startLocation,
+-                () -> naturalReservation.remainsSafe(
+-                        coordinate -> chunk.getWorld().isChunkGenerated(coordinate.x(), coordinate.z()))
+-                        && !hasWorldGuardOverlap(chunk.getWorld(), naturalReservation.blockBounds()));
++                () -> Bukkit.getWorld(worldId) == world && footprint.isLoaded(world)
++                        && naturalReservation.remainsSafe(
++                        coordinate -> ChunkAccess.generatedIfLoaded(world, coordinate.x(), coordinate.z()))
++                        && !hasWorldGuardOverlap(world, naturalReservation.blockBounds()));
+     }
+ 
+     private static boolean hasWorldGuardOverlap(
+diff --git a/src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java b/src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java
+index 0e3b783..6bebf6a 100644
+--- a/src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java
++++ b/src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.modules;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.MetadataHandler;
+ import com.magmaguy.betterstructures.api.WorldGenerationFinishEvent;
+ import com.magmaguy.betterstructures.config.spawnpools.SpawnPoolsConfig;
+@@ -124,7 +125,8 @@ public class ModularWorld {
+     public List<Block> spawnChests() {
+         List<Block> chests = new ArrayList<>();
+         for (Location chestLocation : chestLocations) {
+-            chestLocation.getBlock().setType(Material.CHEST);
++            ChunkAccess.requireLoaded(world, chestLocation.getBlockX() >> 4, chestLocation.getBlockZ() >> 4);
++            chestLocation.getBlock().setType(Material.CHEST, false);
+             chests.add(chestLocation.getBlock());
+         }
+         return chests;
+@@ -133,7 +135,8 @@ public class ModularWorld {
+     public List<Block> spawnBarrels() {
+         List<Block> barrels = new ArrayList<>();
+         for (Location barrelLocation : barrelLocations) {
+-            barrelLocation.getBlock().setType(Material.BARREL);
++            ChunkAccess.requireLoaded(world, barrelLocation.getBlockX() >> 4, barrelLocation.getBlockZ() >> 4);
++            barrelLocation.getBlock().setType(Material.BARREL, false);
+             barrels.add(barrelLocation.getBlock());
+         }
+         return barrels;
+@@ -230,6 +233,8 @@ public class ModularWorld {
+                 }
+                 Location spawnLocation = ModulePasting.entitySpawnLocation(otherLocation.location());
+                 if (!customBossesConfigFields.isInstanced()) {
++                    ChunkAccess.requireLoaded(world,
++                            spawnLocation.getBlockX() >> 4, spawnLocation.getBlockZ() >> 4);
+                     CustomBossEntity customBossEntity = new CustomBossEntity(customBossesConfigFields);
+                     customBossEntity.spawn(spawnLocation, true);
+                 } else {
+@@ -243,6 +248,8 @@ public class ModularWorld {
+     public List<InstancedBossEntity> spawnInstancedEntities() {
+         List<InstancedBossEntity> instancedBossEntities = new ArrayList<>();
+         for (ScheduledInstancedEntity scheduledInstancedEntity : scheduledInstancedEntities) {
++            ChunkAccess.requireLoaded(world,
++                    scheduledInstancedEntity.location.getBlockX() >> 4, scheduledInstancedEntity.location.getBlockZ() >> 4);
+             InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields,
+                     scheduledInstancedEntity.location, scheduledInstancedEntity.level, getDifficultyId(scheduledInstancedEntity.location));
+             instancedBossEntity.spawn(true);
+diff --git a/src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java b/src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java
+index c7dee4d..1477992 100644
+--- a/src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java
++++ b/src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java
+@@ -12,6 +12,7 @@ import com.magmaguy.betterstructures.config.treasures.TreasureConfig;
+ import com.magmaguy.betterstructures.config.treasures.TreasureConfigFields;
+ import com.magmaguy.betterstructures.thirdparty.EliteMobs;
+ import com.magmaguy.betterstructures.util.WorldEditUtils;
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.easyminecraftgoals.NMSManager;
+ import com.magmaguy.magmacore.util.Logger;
+ import com.magmaguy.magmacore.util.SpigotMessage;
+@@ -143,50 +144,10 @@ public final class ModulePasting {
+             throw new RuntimeException(e);
+         }
+ 
+-        // Get dimensions and calculate proper center
+-        BlockVector3 minPoint = transformedClipboard.getMinimumPoint();
+-
+-        World world = location.getWorld();
+-        int baseX = location.getBlockX();
+-        int baseY = location.getBlockY();
+-        int baseZ = location.getBlockZ();
+-
+-        // Create edit session for actual placement
+-        com.sk89q.worldedit.world.World adaptedWorld = BukkitAdapter.adapt(world);
+-
+-        try (EditSession editSession = WorldEdit.getInstance().newEditSession(adaptedWorld)) {
+-            editSession.setTrackingHistory(false);
+-            editSession.setSideEffectApplier(SideEffectSet.none());
+-
+-            // Process each block using calculated center point as reference
+-            transformedClipboard.getRegion().forEach(blockPos -> {
+-                try {
+-                    BaseBlock baseBlock = transformedClipboard.getFullBlock(blockPos);
+-
+-                    // Skip air blocks
+-                    if (baseBlock.getBlockType().getMaterial().isAir()) return;
+-
+-                    // Calculate world coordinates relative to center point
+-                    int worldX = baseX + (blockPos.x() - minPoint.x());
+-                    int worldY = baseY + (blockPos.y() - minPoint.y());
+-                    int worldZ = baseZ + (blockPos.z() - minPoint.z());
+-
+-                    // Place the block
+-                    BlockVector3 worldPos = BlockVector3.at(worldX, worldY, worldZ);
+-                    editSession.setBlock(worldPos, baseBlock);
+-
+-                } catch (WorldEditException e) {
+-                    Logger.warn("Failed to place block at " + blockPos + ": " + e.getMessage());
+-                }
+-            });
+-
+-            //The clipboard is already rotated; going through pasteArmorStands() would rotate it twice
+-            WorldEditUtils.pasteArmorStandsOnlyFromTransformed(transformedClipboard, location);
+-
+-        } catch (Exception e) {
+-            Logger.warn("Failed to paste structure: " + e.getMessage());
+-            throw new RuntimeException(e);
+-        }
++        var minimum = transformedClipboard.getMinimumPoint();
++        var origin = transformedClipboard.getOrigin();
++        Location destination = location.clone().add(origin.x() - minimum.x(), origin.y() - minimum.y(), origin.z() - minimum.z());
++        com.magmaguy.betterstructures.worldedit.Schematic.pasteRaw(transformedClipboard, destination, true, false);
+     }
+ 
+     private static int normalizeRotation(int rotation) {
+@@ -370,6 +331,7 @@ public final class ModulePasting {
+         private boolean cancelled;
+ 
+         private ModularPaste(List<ModuleInput> inputs) { this.inputs = inputs; }
++        @Override public java.util.UUID worldId() { return world.getUID(); }
+         public boolean hasNext() { return !closed && phase < 8; }
+ 
+         private void selectModule() {
+@@ -521,7 +483,11 @@ public final class ModulePasting {
+             contents.rollChestContents(container);
+             ChestFillEvent event = new ChestFillEvent(container, filename);
+             Bukkit.getPluginManager().callEvent(event);
+-            if (!event.isCancelled()) container.update(true);
++            if (!event.isCancelled()) {
++                var at = container.getLocation();
++                ChunkAccess.requireLoaded(world, at.getBlockX() >> 4, at.getBlockZ() >> 4);
++                container.update(true, false);
++            }
+         }
+ 
+         private void advance() {
+diff --git a/src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java b/src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java
+index 09818d6..86be9fe 100644
+--- a/src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java
++++ b/src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java
+@@ -63,7 +63,7 @@ public final class NaturalDungeonReservation {
+         return blockBounds;
+     }
+ 
+-    static BlockBounds blockBounds(
++    public static BlockBounds blockBounds(
+             int originBlockX,
+             int originBlockZ,
+             int latticeRadius,
+diff --git a/src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java b/src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java
+index 52fcfc3..8f9623f 100644
+--- a/src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java
++++ b/src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java
+@@ -1,5 +1,7 @@
+ package com.magmaguy.betterstructures.modules;
+ 
++import com.magmaguy.betterstructures.listeners.DeferredChunkWork;
++import com.magmaguy.betterstructures.util.ChunkFootprint;
+ import com.magmaguy.betterstructures.MetadataHandler;
+ import com.magmaguy.magmacore.util.Logger;
+ import lombok.Getter;
+@@ -233,9 +235,12 @@ public class WFCNode {
+             @Override
+             public void run() {
+                 Location adjustedLocation = location.clone().subtract(new Vector(0,textDisplays.size()/2d,0));
++                DeferredChunkWork.submit(new Object(), world.getUID(),
++                        ChunkFootprint.at(adjustedLocation), "debug text", loadedWorld -> {
+                 TextDisplay textDisplay = (TextDisplay) world.spawnEntity(adjustedLocation, EntityType.TEXT_DISPLAY);
+                 configureTextDisplay(textDisplay, text, color, scale);
+                 textDisplays.add(textDisplay);
++                });
+             }
+         }.runTask(MetadataHandler.PLUGIN);
+     }
+@@ -286,6 +291,9 @@ public class WFCNode {
+         int sizeXZ = wfcGenerator.getModuleGeneratorsConfigFields().getModuleSizeXZ();
+         int sizeY = wfcGenerator.getModuleGeneratorsConfigFields().getModuleSizeY();
+ 
++        DeferredChunkWork.submit(new Object(), world.getUID(),
++                ChunkFootprint.blocks(startLocation.getX(), startLocation.getZ(),
++                        startLocation.getX() + sizeXZ - 1, startLocation.getZ() + sizeXZ - 1), "debug lattice", loadedWorld -> {
+         for (int x = 0; x < sizeXZ; x++) {
+             for (int y = 0; y < sizeY; y++) {
+                 for (int z = 0; z < sizeXZ; z++) {
+@@ -304,13 +312,14 @@ public class WFCNode {
+ 
+                     // Place material only if block is on at least 2 edges (true edge/corner)
+                     if (edgeCount >= 2) {
+-                        blockLocation.getBlock().setType(material);
++                        blockLocation.getBlock().setType(material, false);
+                     } else {
+-                        blockLocation.getBlock().setType(Material.AIR);
++                        blockLocation.getBlock().setType(Material.AIR, false);
+                     }
+                 }
+             }
+         }
++        });
+     }
+ 
+     public void debugPaste(Material material) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java b/src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java
+index 09880d6..e6201bf 100644
+--- a/src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java
++++ b/src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.thirdparty;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.MetadataHandler;
+ import com.magmaguy.elitemobs.commands.ReloadCommand;
+ import com.magmaguy.elitemobs.dungeons.EliteMobsWorld;
+@@ -25,6 +26,7 @@ public class EliteMobs {
+      * @param filename Filename of the boss, as set in the EliteMobs custombosses configuration folder
+      */
+     public static boolean Spawn(Location location, String filename) {
++        ChunkAccess.requireLoaded(location.getWorld(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
+         if (Bukkit.getPluginManager().getPlugin("EliteMobs") != null) {
+             RegionalBossEntity regionalBossEntity = RegionalBossEntity.SpawnRegionalBoss(filename, location);
+             if (regionalBossEntity == null) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java b/src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java
+index 4299a7a..646dc60 100644
+--- a/src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java
++++ b/src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.thirdparty;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.magmacore.util.Logger;
+ import io.lumine.mythic.api.mobs.MythicMob;
+ import io.lumine.mythic.bukkit.BukkitAdapter;
+@@ -16,6 +17,7 @@ import org.bukkit.entity.Player;
+ public class MythicMobs {
+ 
+     public static boolean Spawn(Location location, String filename) {
++        ChunkAccess.requireLoaded(location.getWorld(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
+         if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
+             for (Player player : Bukkit.getOnlinePlayers()) {
+                 if (player.hasPermission("betterstructures.*")) {
+diff --git a/src/main/java/com/magmaguy/betterstructures/util/ChunkAccess.java b/src/main/java/com/magmaguy/betterstructures/util/ChunkAccess.java
+new file mode 100644
+index 0000000..9e9c017
+--- /dev/null
++++ b/src/main/java/com/magmaguy/betterstructures/util/ChunkAccess.java
+@@ -0,0 +1,61 @@
++package com.magmaguy.betterstructures.util;
++
++import org.bukkit.Bukkit;
++import org.bukkit.Chunk;
++import org.bukkit.Location;
++import org.bukkit.World;
++import org.bukkit.block.Block;
++
++import java.util.concurrent.CompletableFuture;
++
++/** Never turn a missing chunk into a synchronous load, even on non-Paper servers. */
++public final class ChunkAccess {
++    private ChunkAccess() { }
++
++    public static void requireMainThread() {
++        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Live world access requires the server thread");
++    }
++
++    public static void requireLoaded(World world, int x, int z) {
++        requireMainThread();
++        if (!world.isChunkLoaded(x, z))
++            throw new IllegalStateException("Chunk is not ready: " + world.getName() + " (" + x + ", " + z + ")");
++    }
++
++    public static Chunk loadedChunk(World world, int x, int z) {
++        requireLoaded(world, x, z);
++        // No scheduler yield between the test and retrieval, on the server thread.
++        return world.getChunkAt(x, z);
++    }
++
++    public static Block block(Location at) {
++        requireLoaded(at.getWorld(), at.getBlockX() >> 4, at.getBlockZ() >> 4);
++        return at.getBlock();
++    }
++
++    public static int highestY(Location at) {
++        requireLoaded(at.getWorld(), at.getBlockX() >> 4, at.getBlockZ() >> 4);
++        return at.getWorld().getHighestBlockYAt(at);
++    }
++
++    public static boolean generatedIfLoaded(World world, int x, int z) {
++        requireMainThread();
++        // CraftWorld.isChunkGenerated may wait for disk IO through managedBlock otherwise.
++        return world.isChunkLoaded(x, z) && world.isChunkGenerated(x, z);
++    }
++
++    public static CompletableFuture<Chunk> request(World world, int x, int z) {
++        requireMainThread();
++        try {
++            // Keep the existing Spigot compile API; Paper/Purpur supplies this method.
++            @SuppressWarnings("unchecked")
++            var future = (CompletableFuture<Chunk>) world.getClass()
++                    .getMethod("getChunkAtAsync", int.class, int.class, boolean.class)
++                    .invoke(world, x, z, true);
++            return future;
++        } catch (ReflectiveOperationException failure) {
++            return CompletableFuture.failedFuture(new IllegalStateException(
++                    "Asynchronous chunk loading is unavailable; refusing synchronous fallback", failure));
++        }
++    }
++}
+diff --git a/src/main/java/com/magmaguy/betterstructures/util/ChunkFootprint.java b/src/main/java/com/magmaguy/betterstructures/util/ChunkFootprint.java
+new file mode 100644
+index 0000000..38398b1
+--- /dev/null
++++ b/src/main/java/com/magmaguy/betterstructures/util/ChunkFootprint.java
+@@ -0,0 +1,24 @@
++package com.magmaguy.betterstructures.util;
++
++import org.bukkit.Location;
++import org.bukkit.World;
++
++/** Inclusive X/Z bounds; flooring before shifting also handles negative/fractional anchors. */
++public record ChunkFootprint(int minX, int minZ, int maxX, int maxZ) {
++    public static ChunkFootprint blocks(double minX, double minZ, double maxX, double maxZ) {
++        return new ChunkFootprint((int) Math.floor(minX) >> 4, (int) Math.floor(minZ) >> 4,
++                (int) Math.floor(maxX) >> 4, (int) Math.floor(maxZ) >> 4);
++    }
++
++    public static ChunkFootprint at(Location at) {
++        return blocks(at.getX(), at.getZ(), at.getX(), at.getZ());
++    }
++
++    public boolean isLoaded(World world) {
++        ChunkAccess.requireMainThread();
++        for (int x = minX; x <= maxX; x++)
++            for (int z = minZ; z <= maxZ; z++)
++                if (!world.isChunkLoaded(x, z)) return false;
++        return true;
++    }
++}
+diff --git a/src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java b/src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java
+index 2417e81..926dd4f 100644
+--- a/src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java
++++ b/src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java
+@@ -48,6 +48,12 @@ public class ChunkPregenerator implements Listener {
+     private volatile boolean isCancelled = false;
+     private volatile boolean isPaused = false;
+     private boolean isFinished = false;
++    private final java.util.Map<String, java.util.concurrent.CompletableFuture<Chunk>> pendingChunks = new java.util.LinkedHashMap<>();
++    private final java.util.Map<String, Long> requestedAt = new java.util.HashMap<>();
++    private record ChunkRequest(int x, int z, String key) { }
++    private final java.util.Queue<ChunkRequest> waitingRequests = new java.util.ArrayDeque<>();
++    private Runnable layerComplete;
++    private BukkitTask asyncPollTask;
+ 
+     public static Set<ChunkPregenerator> getActivePregenerators() {
+         return Set.copyOf(activePregenerators);
+@@ -90,6 +96,8 @@ public class ChunkPregenerator implements Listener {
+         // Start TPS monitoring task (every 2 seconds = 40 ticks)
+         tpsMonitorTask = Bukkit.getScheduler().runTaskTimer(MetadataHandler.PLUGIN, this::checkTPSAndPause, 40L, 40L);
+ 
++        asyncPollTask = Bukkit.getScheduler().runTaskTimer(MetadataHandler.PLUGIN, this::pollChunkRequests, 1L, 1L);
++
+         // Start with radius 0 (center chunk)
+         generateNextLayer();
+     }
+@@ -144,21 +152,15 @@ public class ChunkPregenerator implements Listener {
+ 
+         final boolean[] chunksAdded = {false};
+ 
++        Runnable nextLayer = () -> {
++            if (isCancelled) { onCancelled(); return; }
++            currentRadius++;
++            generateNextLayer();
++        };
+         WorkloadRunnable workload = new WorkloadRunnable(tickUsage, () -> {
+-            // Check if cancelled before continuing
+-            if (isCancelled) {
+-                onCancelled();
+-                return;
+-            }
+-
+-            // When this layer completes, generate the next layer if chunks were added
+-            if (chunksAdded[0]) {
+-                currentRadius++;
+-                generateNextLayer();
+-            } else {
+-                // No more chunks to generate, we're done
+-                onComplete();
+-            }
++            // A dispatched layer is not complete until its asynchronous loads finish.
++            if (pendingChunks.isEmpty() && waitingRequests.isEmpty()) nextLayer.run();
++            else layerComplete = nextLayer;
+         });
+ 
+         if ("SQUARE".equalsIgnoreCase(shape)) {
+@@ -173,6 +175,10 @@ public class ChunkPregenerator implements Listener {
+ 
+         // If no chunks were added to this layer, skip the workload and move to next layer immediately
+         if (!chunksAdded[0]) {
++            if (!pendingChunks.isEmpty() || !waitingRequests.isEmpty()) {
++                layerComplete = nextLayer;
++                return;
++            }
+             currentRadius++;
+             generateNextLayer();
+             return;
+@@ -264,22 +270,44 @@ public class ChunkPregenerator implements Listener {
+     }
+ 
+     private void generateChunk(int chunkX, int chunkZ, String chunkKey) {
+-        try {
+-            Chunk chunk = world.getChunkAt(chunkX, chunkZ);
+-            if (!chunk.isLoaded()) {
+-                if (!chunk.load(true)) throw new IllegalStateException("Chunk load was refused");
+-            }
+-            // Chunk counting is now handled by ChunkLoadEvent listener
+-        } catch (Exception e) {
+-            generatedChunks.remove(chunkKey);
+-            Logger.warn("Failed to generate chunk at (" + chunkX + ", " + chunkZ + "): " + e.getMessage());
+-            isCancelled = true;
+-            if (beginFinish()) {
+-                cleanup();
+-                Logger.warn("Chunk pregeneration incomplete. Failed coordinate: " + chunkKey
+-                        + "; completed " + generatedChunks.size() + " chunks. World border was not changed.");
++        if (waitingRequests.size() >= 4096) {
++            Logger.warn("Pregeneration queue limit reached in " + world.getName() + " at " + chunkKey + "; stopping without changing the border.");
++            cancel();
++            return;
++        }
++        waitingRequests.add(new ChunkRequest(chunkX, chunkZ, chunkKey));
++    }
++
++    private void pollChunkRequests() {
++        if (isCancelled || isFinished) return;
++        int checks = 0;
++        for (String key : java.util.List.copyOf(pendingChunks.keySet())) {
++            if (++checks > 32) break;
++            var future = pendingChunks.get(key);
++            try {
++                if (System.nanoTime() - requestedAt.get(key) >= DeferredWorkQueue.TIMEOUT_NANOS)
++                    throw new IllegalStateException("Asynchronous load timed out");
++                if (!future.isDone()) continue;
++                if (future.join() == null) throw new IllegalStateException("Chunk load returned null");
++                pendingChunks.remove(key);
++                requestedAt.remove(key);
++            } catch (RuntimeException failure) {
++                generatedChunks.remove(key);
++                Logger.warn("Pregeneration stopped in " + world.getName() + " at " + key + ": " + failure);
++                cancel();
++                return;
+             }
+         }
++        if (!isPaused) for (int requests = 0; requests < 4 && pendingChunks.size() < 32 && !waitingRequests.isEmpty(); requests++) {
++            ChunkRequest request = waitingRequests.remove();
++            pendingChunks.put(request.key(), ChunkAccess.request(world, request.x(), request.z()));
++            requestedAt.put(request.key(), System.nanoTime());
++        }
++        if (!isPaused && pendingChunks.isEmpty() && waitingRequests.isEmpty() && layerComplete != null) {
++            Runnable completed = layerComplete;
++            layerComplete = null;
++            completed.run();
++        }
+     }
+ 
+     private void onComplete() {
+@@ -317,6 +345,12 @@ public class ChunkPregenerator implements Listener {
+             currentWorkloadTask = null;
+         }
+         queuedChunks.clear();
++        pendingChunks.values().forEach(future -> future.cancel(false));
++        pendingChunks.clear();
++        waitingRequests.clear();
++        requestedAt.clear();
++        layerComplete = null;
++        if (asyncPollTask != null) { asyncPollTask.cancel(); asyncPollTask = null; }
+ 
+         // Unregister event listener
+         HandlerList.unregisterAll(this);
+diff --git a/src/main/java/com/magmaguy/betterstructures/util/DeferredWorkQueue.java b/src/main/java/com/magmaguy/betterstructures/util/DeferredWorkQueue.java
+new file mode 100644
+index 0000000..decd409
+--- /dev/null
++++ b/src/main/java/com/magmaguy/betterstructures/util/DeferredWorkQueue.java
+@@ -0,0 +1,63 @@
++package com.magmaguy.betterstructures.util;
++
++import java.util.LinkedHashMap;
++import java.util.function.Consumer;
++import java.util.function.Predicate;
++
++/** Server-thread queue. Retries never reset age, reorder FIFO eviction, or duplicate keys. */
++public final class DeferredWorkQueue<K, V> {
++    public static final int MAX_ATTEMPTS = 16;
++    public static final long TIMEOUT_NANOS = 60_000_000_000L;
++    private final int capacity;
++    private final LinkedHashMap<K, Entry<V>> entries = new LinkedHashMap<>();
++    private record Entry<V>(V value, long created, long nextTick, int attempts) { }
++
++    public DeferredWorkQueue(int capacity) { this.capacity = capacity; }
++
++    public void add(K key, V value, long tick, long now, Consumer<V> dropped) {
++        if (entries.containsKey(key)) return;
++        if (entries.size() >= capacity) {
++            var oldest = entries.entrySet().iterator();
++            V evicted = oldest.next().getValue().value();
++            oldest.remove();
++            dropped.accept(evicted);
++        }
++        entries.put(key, new Entry<>(value, now, tick + 1, 0));
++    }
++
++    public int drain(long tick, long now, int maxOperations, Predicate<V> ready,
++                     Consumer<V> run, Consumer<V> dropped, java.util.function.BooleanSupplier withinBudget) {
++        int operations = 0;
++        // Callbacks can enqueue successors. Inspect a snapshot, never run those in the same tick.
++        for (K key : java.util.List.copyOf(entries.keySet())) {
++            if (operations >= maxOperations || !withinBudget.getAsBoolean()) break;
++            Entry<V> entry = entries.get(key);
++            if (entry == null) continue;
++            if (now - entry.created() >= TIMEOUT_NANOS) {
++                entries.remove(key);
++                dropped.accept(entry.value());
++                continue;
++            }
++            if (tick < entry.nextTick()) continue;
++            operations++;
++            if (ready.test(entry.value())) {
++                entries.remove(key);
++                run.accept(entry.value());
++            } else if (entry.attempts() + 1 >= MAX_ATTEMPTS) {
++                entries.remove(key);
++                dropped.accept(entry.value());
++            } else {
++                int attempts = entry.attempts() + 1;
++                entries.put(key, new Entry<>(entry.value(), entry.created(),
++                        tick + backoffTicks(attempts), attempts));
++            }
++        }
++        return operations;
++    }
++
++    public static long backoffTicks(int attempts) { return Math.min(100L, 1L << Math.min(attempts, 7)); }
++    public void removeIf(Predicate<V> predicate) { entries.values().removeIf(e -> predicate.test(e.value())); }
++    public boolean isEmpty() { return entries.isEmpty(); }
++    public int size() { return entries.size(); }
++    public void clear() { entries.clear(); }
++}
+diff --git a/src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java b/src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java
+index 9bacd25..0e919dd 100644
+--- a/src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java
++++ b/src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java
+@@ -6,21 +6,16 @@ import com.magmaguy.magmacore.util.Logger;
+ import com.sk89q.jnbt.CompoundTag;
+ import com.sk89q.jnbt.ListTag;
+ import com.sk89q.jnbt.StringTag;
+-import com.sk89q.worldedit.EditSession;
+ import com.sk89q.worldedit.WorldEdit;
+ import com.sk89q.worldedit.WorldEditException;
+ import com.sk89q.worldedit.bukkit.BukkitAdapter;
+ import com.sk89q.worldedit.entity.BaseEntity;
+ import com.sk89q.worldedit.entity.Entity;
+ import com.sk89q.worldedit.extent.clipboard.Clipboard;
+-import com.sk89q.worldedit.function.mask.BlockTypeMask;
+ import com.sk89q.worldedit.function.operation.Operation;
+-import com.sk89q.worldedit.function.operation.Operations;
+ import com.sk89q.worldedit.math.BlockVector3;
+ import com.sk89q.worldedit.regions.CuboidRegion;
+ import com.sk89q.worldedit.regions.Region;
+-import com.sk89q.worldedit.session.ClipboardHolder;
+-import com.sk89q.worldedit.util.SideEffectSet;
+ import com.sk89q.worldedit.world.block.BaseBlock;
+ import com.sk89q.worldedit.world.block.BlockState;
+ import com.sk89q.worldedit.world.block.BlockStateHolder;
+@@ -275,38 +270,10 @@ public class WorldEditUtils {
+     }
+ 
+     public static void pasteArmorStandsOnlyFromTransformed(Clipboard transformedClipboard, Location location) {
+-        com.sk89q.worldedit.world.World adaptedWorld = BukkitAdapter.adapt(location.getWorld());
+-
+-        try (EditSession editSession = WorldEdit.getInstance().newEditSession(adaptedWorld)) {
+-            editSession.setTrackingHistory(false);
+-            editSession.setSideEffectApplier(SideEffectSet.none());
+-
+-            ClipboardHolder clipboardHolder = new ClipboardHolder(transformedClipboard);
+-
+-            BlockVector3 minPoint = transformedClipboard.getMinimumPoint();
+-            BlockVector3 origin   = transformedClipboard.getOrigin();
+-
+-            // Align entities the same way you aligned blocks: min -> base
+-            BlockVector3 pastePosition = BlockVector3.at(
+-                    location.getBlockX() + (origin.x() - minPoint.x()),
+-                    location.getBlockY() + (origin.y() - minPoint.y()),
+-                    location.getBlockZ() + (origin.z() - minPoint.z())
+-            );
+-
+-            Operation operation = clipboardHolder
+-                    .createPaste(editSession)
+-                    .to(pastePosition)
+-                    .copyEntities(true)
+-                    .copyBiomes(false)
+-                    .ignoreAirBlocks(true)
+-                    .maskSource(new BlockTypeMask(transformedClipboard, new BlockType[0]))
+-                    .build();
+-
+-            Operations.complete(operation);
+-            
+-        } catch (Exception e) {
+-            Logger.warn("Failed to paste entities at " + location + ": " + e.getMessage());
+-        }
++        var minimum = transformedClipboard.getMinimumPoint();
++        var origin = transformedClipboard.getOrigin();
++        Location destination = location.clone().add(origin.x() - minimum.x(), origin.y() - minimum.y(), origin.z() - minimum.z());
++        com.magmaguy.betterstructures.worldedit.Schematic.pasteRaw(transformedClipboard, destination, true, true);
+     }
+ 
+ }
+diff --git a/src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java b/src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java
+index 1d76aca..ffe2ea0 100644
+--- a/src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java
++++ b/src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java
+@@ -5,68 +5,62 @@ import org.bukkit.Bukkit;
+ import org.bukkit.Chunk;
+ import org.bukkit.Location;
+ import org.bukkit.World;
++import com.magmaguy.betterstructures.util.ChunkAccess;
++import com.magmaguy.betterstructures.util.DeferredWorkQueue;
+ 
+-import java.lang.reflect.Method;
+ import java.util.concurrent.CompletableFuture;
+ 
+ /** One requested chunk and one owned ticket per active paste; all world mutation stays on the server thread. */
+ public final class PasteChunkReadiness implements AutoCloseable {
+     private final World world;
+-    private final Method asyncLoad;
+     private CompletableFuture<Chunk> pending;
+     private Chunk held;
+     private boolean closed;
++    private long requestedAt;
++    private int requestedX, requestedZ;
++    private int attempts;
+ 
+     public PasteChunkReadiness(World world) {
+         this.world = world;
+-        Method method;
+-        try { method = world.getClass().getMethod("getChunkAtAsync", int.class, int.class, boolean.class); }
+-        catch (NoSuchMethodException spigot) { method = null; }
+-        asyncLoad = method;
+     }
+ 
+     public boolean ready(Location location) {
++        ChunkAccess.requireMainThread();
+         if (closed) return false;
++        if (Bukkit.getWorld(world.getUID()) != world)
++            throw new IllegalStateException("Paste world was unloaded: " + world.getName());
+         int x = location.getBlockX() >> 4, z = location.getBlockZ() >> 4;
+-        if (held != null && held.getX() == x && held.getZ() == z) return true;
++        if (held != null && held.getX() == x && held.getZ() == z && world.isChunkLoaded(x, z)) return true;
+         if (pending != null) {
++            if (System.nanoTime() - requestedAt >= DeferredWorkQueue.TIMEOUT_NANOS)
++                throw new IllegalStateException("Chunk load timed out: " + world.getName() + " (" + requestedX + ", " + requestedZ + ")");
+             if (!pending.isDone()) return false;
+             Chunk loaded = pending.join(); // isDone above: never waits on the server thread.
+             pending = null;
+             if (closed || Bukkit.getWorld(world.getUID()) != world)
+                 throw new IllegalStateException("Paste world was unloaded while loading a chunk");
+-            if (loaded == null || !loaded.isLoaded()) return false;
++            if (loaded == null || !world.isChunkLoaded(loaded.getX(), loaded.getZ())) return false;
+             hold(loaded);
++            attempts = 0;
+             return loaded.getX() == x && loaded.getZ() == z;
+         }
+         if (world.isChunkLoaded(x, z)) {
+-            hold(world.getChunkAt(x, z));
++            hold(ChunkAccess.loadedChunk(world, x, z));
++            attempts = 0;
+             return true;
+         }
+         release();
+-        if (asyncLoad != null) {
+-            try {
+-                @SuppressWarnings("unchecked")
+-                CompletableFuture<Chunk> request = (CompletableFuture<Chunk>) asyncLoad.invoke(world, x, z, true);
+-                pending = request;
+-            } catch (ReflectiveOperationException failure) {
+-                throw new IllegalStateException("Could not request a Paper chunk for pasting", failure);
+-            }
+-        } else {
+-            // Spigot exposes synchronous loading only. Isolate one load on a later tick;
+-            // the load itself cannot honor a time budget on that platform.
+-            CompletableFuture<Chunk> request = new CompletableFuture<>();
+-            pending = request;
+-            Bukkit.getScheduler().runTask(MetadataHandler.PLUGIN, () -> {
+-                if (closed || Bukkit.getWorld(world.getUID()) != world) { request.cancel(false); return; }
+-                try { request.complete(world.getChunkAt(x, z)); }
+-                catch (Throwable failure) { request.completeExceptionally(failure); }
+-            });
+-        }
++        if (attempts == 0) requestedAt = System.nanoTime();
++        if (++attempts > DeferredWorkQueue.MAX_ATTEMPTS || System.nanoTime() - requestedAt >= DeferredWorkQueue.TIMEOUT_NANOS)
++            throw new IllegalStateException("Chunk retries exhausted: " + world.getName() + " (" + x + ", " + z + ")");
++        requestedX = x;
++        requestedZ = z;
++        pending = ChunkAccess.request(world, x, z);
+         return false;
+     }
+ 
+     private void hold(Chunk chunk) {
++        ChunkAccess.requireLoaded(world, chunk.getX(), chunk.getZ());
+         release();
+         chunk.addPluginChunkTicket(MetadataHandler.PLUGIN);
+         held = chunk;
+@@ -82,6 +76,7 @@ public final class PasteChunkReadiness implements AutoCloseable {
+     @Override public void close() {
+         closed = true;
+         release();
++        if (pending != null) pending.cancel(false);
+         pending = null;
+     }
+ }
+diff --git a/src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java b/src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java
+index 571559f..cf30e98 100644
+--- a/src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java
++++ b/src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java
+@@ -1,5 +1,6 @@
+ package com.magmaguy.betterstructures.worldedit;
+ 
++import com.magmaguy.betterstructures.util.ChunkAccess;
+ import com.magmaguy.betterstructures.MetadataHandler;
+ import com.magmaguy.betterstructures.config.DefaultConfig;
+ import com.magmaguy.betterstructures.util.WorldEditUtils;
+@@ -129,23 +130,13 @@ public class Schematic {
+     }
+ 
+     /**
+-     * Pastes a schematic synchronously
++     * Enqueues a raw schematic paste. Each destination must be ready before WorldEdit touches it.
+      *
+      * @param clipboard The WorldEdit clipboard containing the schematic
+      * @param location  The location to paste at
+      */
+     public static void paste(Clipboard clipboard, Location location) {
+-        World world = BukkitAdapter.adapt(location.getWorld());
+-        try (EditSession editSession = WorldEdit.getInstance().newEditSession(world)) {
+-            Operation operation = new ClipboardHolder(clipboard)
+-                    .createPaste(editSession)
+-                    .to(BlockVector3.at(location.getX(), location.getY(), location.getZ()))
+-                    // configure here
+-                    .build();
+-            Operations.complete(operation);
+-        } catch (WorldEditException e) {
+-            throw new RuntimeException(e);
+-        }
++        enqueue(new DirectPasteOperation(clipboard, location.clone(), false));
+     }
+ 
+     private static boolean isSolidBlock(Clipboard schematicClipboard, BlockVector3 clipboardPosition) {
+@@ -224,12 +215,11 @@ public class Schematic {
+             Vector schematicOffset,
+             Function<Boolean, Material> pedestalMaterialProvider,
+             Runnable onComplete) {
+-        pasteQueue.add(new ClipboardPasteOperation(
++        enqueue(new ClipboardPasteOperation(
+                 schematicClipboard,
+                 location.clone().add(schematicOffset),
+                 pedestalMaterialProvider,
+                 onComplete));
+-        startQueueIfIdle();
+     }
+ 
+     private static void startQueueIfIdle() {
+@@ -237,6 +227,14 @@ public class Schematic {
+     }
+ 
+     public static void enqueue(PasteOperation operation) {
++        ChunkAccess.requireMainThread();
++        if (pasteQueue.size() >= 4096) {
++            PasteOperation discarded = pasteQueue.poll();
++            if (discarded != null) {
++                discarded.close();
++                Logger.warn("Discarded oldest paste at queue limit; world=" + discarded.worldId());
++            }
++        }
+         pasteQueue.add(operation);
+         startQueueIfIdle();
+     }
+@@ -322,10 +320,11 @@ public class Schematic {
+                 // Paper can try to load the old block entity against the replacement state.
+                 destination.getState();
+             }
+-            destination.setBlockData(pasteBlock.blockData());
++            destination.setBlockData(pasteBlock.blockData(), false);
+         } else if (pasteBlock.clipboard() != null) {
+             try (EditSession editSession = WorldEdit.getInstance().newEditSession(
+                     BukkitAdapter.adapt(pasteBlock.block().getLocation().getWorld()))) {
++                editSession.setSideEffectApplier(com.sk89q.worldedit.util.SideEffectSet.none());
+                 Operation worldeditPaste = new ClipboardHolder(pasteBlock.clipboard())
+                         .createPaste(editSession)
+                         .to(BlockVector3.at(
+@@ -374,7 +373,82 @@ public class Schematic {
+         isDistributedPasting = false;
+     }
+ 
++    public static void discardWorld(UUID worldId) {
++        pasteQueue.removeIf(operation -> {
++            if (!worldId.equals(operation.worldId())) return false;
++            operation.close();
++            return true;
++        });
++        if (activePasteOperation != null && worldId.equals(activePasteOperation.worldId())) {
++            if (activePasteTask != null) activePasteTask.cancel();
++            abortActivePaste();
++            processNextPaste();
++        }
++    }
++
++    /** The raw WorldEdit path also uses readiness, including entity destinations outside the region. */
++    public static void pasteRaw(Clipboard clipboard, Location location, boolean skipAir, boolean entitiesOnly) {
++        DirectPasteOperation operation = new DirectPasteOperation(clipboard, location.clone(), skipAir);
++        if (entitiesOnly) operation.blocks = Collections.emptyIterator();
++        enqueue(operation);
++    }
++
++    private static final class DirectPasteOperation implements PasteOperation {
++        private final Clipboard clipboard;
++        private final Location location;
++        private final boolean skipAir;
++        private final PasteChunkReadiness chunks;
++        private Iterator<BlockVector3> blocks;
++        private final Iterator<? extends com.sk89q.worldedit.entity.Entity> entities;
++        private BlockVector3 nextBlock;
++        private com.sk89q.worldedit.entity.Entity nextEntity;
++        private Location target;
++
++        private DirectPasteOperation(Clipboard clipboard, Location location, boolean skipAir) {
++            this.clipboard = clipboard;
++            // ClipboardHolder's old destination was BlockVector3.at(location), i.e. floored.
++            this.location = new Location(location.getWorld(), location.getBlockX(), location.getBlockY(), location.getBlockZ());
++            this.skipAir = skipAir;
++            chunks = new PasteChunkReadiness(location.getWorld());
++            blocks = clipboard.getRegion().iterator();
++            entities = clipboard.getEntities().iterator();
++        }
++
++        @Override public UUID worldId() { return location.getWorld().getUID(); }
++        @Override public boolean hasNext() { return nextBlock != null || nextEntity != null || blocks.hasNext() || entities.hasNext(); }
++        @Override public boolean ready() {
++            if (nextBlock == null && nextEntity == null) {
++                if (blocks.hasNext()) nextBlock = blocks.next();
++                else if (entities.hasNext()) nextEntity = entities.next();
++            }
++            var origin = clipboard.getOrigin();
++            var position = nextBlock != null ? nextBlock.toVector3() : nextEntity.getLocation().toVector();
++            target = location.clone().add(position.x() - origin.x(), position.y() - origin.y(), position.z() - origin.z());
++            return chunks.ready(target);
++        }
++        @Override public void pasteNext() {
++            try (EditSession edit = WorldEdit.getInstance().newEditSession(BukkitAdapter.adapt(location.getWorld()))) {
++                edit.setTrackingHistory(false);
++                edit.setSideEffectApplier(com.sk89q.worldedit.util.SideEffectSet.none());
++                if (nextBlock != null) {
++                    BaseBlock block = clipboard.getFullBlock(nextBlock);
++                    if (!skipAir || !WorldEditUtils.isAir(block.toImmutableState()))
++                        edit.setBlock(BlockVector3.at(target.getBlockX(), target.getBlockY(), target.getBlockZ()), block);
++                } else {
++                    new com.sk89q.worldedit.function.entity.ExtentEntityCopy(clipboard.getOrigin().toVector3(), edit,
++                            com.sk89q.worldedit.math.Vector3.at(location.getX(), location.getY(), location.getZ()),
++                            new com.sk89q.worldedit.math.transform.AffineTransform()).apply(nextEntity);
++                }
++            } catch (WorldEditException failure) { throw new IllegalStateException(failure); }
++            nextBlock = null;
++            nextEntity = null;
++        }
++        @Override public void close() { chunks.close(); }
++        @Override public void onComplete() { }
++    }
++
+     public interface PasteOperation {
++        default UUID worldId() { return null; }
+         boolean hasNext();
+ 
+         default boolean ready() { return true; }
+@@ -415,6 +489,8 @@ public class Schematic {
+             return chunks.ready(adjustedLocation.clone().add(cursor.x, cursor.y, cursor.z));
+         }
+ 
++        @Override public UUID worldId() { return adjustedLocation.getWorld().getUID(); }
++
+         @Override public void close() { chunks.close(); }
+ 
+         @Override
+diff --git a/src/test/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuardTest.java b/src/test/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuardTest.java
+new file mode 100644
+index 0000000..53fb715
+--- /dev/null
++++ b/src/test/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuardTest.java
+@@ -0,0 +1,17 @@
++package com.magmaguy.betterstructures.listeners;
++
++import org.junit.jupiter.api.Test;
++import static org.junit.jupiter.api.Assertions.*;
++
++class ChunkScanReentrancyGuardTest {
++    @Test void nestedDrainIsRejectedAndFailureAlwaysReleasesGuard() {
++        var guard = new ChunkScanReentrancyGuard();
++        assertThrows(IllegalStateException.class, () -> guard.runIfIdle(() -> {
++            assertTrue(guard.isActive());
++            assertFalse(guard.runIfIdle(() -> fail("Nested work must not run")));
++            throw new IllegalStateException("Fixture failure");
++        }));
++        assertFalse(guard.isActive());
++        assertTrue(guard.runIfIdle(() -> { }));
++    }
++}
+diff --git a/src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java b/src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java
+index 7e51ae4..f85d56b 100644
+--- a/src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java
++++ b/src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java
+@@ -276,11 +276,12 @@ class ModularPastingTest {
+         }
+ 
+         @Override public boolean isChunkLoaded(int x, int z) {
+-            requestedChunks.add(x + "," + z);
+             return true;
+         }
+ 
+         @Override public ChunkMock getChunkAt(int x, int z) {
++            // Count retrievals, rather than the additional non-loading readiness checks.
++            requestedChunks.add(x + "," + z);
+             ChunkMock chunk = mock(ChunkMock.class);
+             when(chunk.getX()).thenReturn(x);
+             when(chunk.getZ()).thenReturn(z);
+diff --git a/src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java b/src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java
+index a1531ca..c00dc1a 100644
+--- a/src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java
++++ b/src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java
+@@ -110,6 +110,8 @@ class ModularWorldDifficultyTest {
+                 generated.spawnOtherEntitiesAt(new ModulePasting.InterpretedSign(position, List.of("[pool:modular_difficulty_fixture]")));
+             assertTrue(captured.constructed().isEmpty(), "Instance mobs must wait for the completed world's owner to spawn them");
+ 
++            // The API now refuses implicit loads. The instance owner loads its destinations first.
++            for (Location position : positions) world.getChunkAt(position.getBlockX() >> 4, position.getBlockZ() >> 4);
+             List<InstancedBossEntity> spawned = generated.spawnInstancedEntities();
+ 
+             assertEquals(3, spawned.size());
+@@ -140,6 +142,7 @@ class ModularWorldDifficultyTest {
+         CustomBossesConfigFields previousBoss = bosses.put(bossId, boss);
+         Location marker = new Location(world, -120, 16, 41);
+         ModularWorld generated = new ModularWorld(world, folder.toFile(), List.of(), new Location(world, 0, 16, 0), 384);
++        world.getChunkAt(marker.getBlockX() >> 4, marker.getBlockZ() >> 4);
+         try (var captured = mockConstruction(com.magmaguy.elitemobs.mobconstructor.custombosses.CustomBossEntity.class)) {
+             generated.spawnOtherEntitiesAt(new ModulePasting.InterpretedSign(marker, List.of("[pool:center_fixture]")));
+             verify(captured.constructed().getFirst()).spawn(new Location(world, -119.5, 16, 41.5), true);
+diff --git a/src/test/java/com/magmaguy/betterstructures/util/DeferredWorkQueueTest.java b/src/test/java/com/magmaguy/betterstructures/util/DeferredWorkQueueTest.java
+new file mode 100644
+index 0000000..7fd6914
+--- /dev/null
++++ b/src/test/java/com/magmaguy/betterstructures/util/DeferredWorkQueueTest.java
+@@ -0,0 +1,75 @@
++package com.magmaguy.betterstructures.util;
++
++import org.junit.jupiter.api.Test;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.atomic.AtomicInteger;
++import static org.junit.jupiter.api.Assertions.*;
++
++class DeferredWorkQueueTest {
++    @Test void retriesBackOffWithoutExecutingWorkAndEventuallyDrop() {
++        var queue = new DeferredWorkQueue<String, String>(4);
++        var dropped = new ArrayList<String>();
++        var checks = new AtomicInteger();
++        queue.add("a", "a", 0, 0, dropped::add);
++        long tick = 1;
++        for (int attempt = 1; attempt <= DeferredWorkQueue.MAX_ATTEMPTS; attempt++) {
++            queue.drain(tick, 0, 2, value -> { checks.incrementAndGet(); return false; },
++                    value -> fail("Unavailable chunks must not execute"), dropped::add, () -> true);
++            if (attempt < DeferredWorkQueue.MAX_ATTEMPTS) {
++                queue.drain(tick + 1, 0, 2, value -> fail("Backoff must be honored"), value -> fail(), dropped::add, () -> true);
++                tick += DeferredWorkQueue.backoffTicks(attempt);
++            }
++        }
++        assertEquals(16, checks.get());
++        assertEquals(List.of("a"), dropped);
++        assertTrue(queue.isEmpty());
++    }
++
++    @Test void duplicateKeysKeepOriginalAgeAndOldestIsEvictedEvenAfterRetry() {
++        var queue = new DeferredWorkQueue<String, String>(2);
++        var dropped = new ArrayList<String>();
++        queue.add("a", "first", 0, 0, dropped::add);
++        queue.add("b", "second", 0, 0, dropped::add);
++        queue.drain(1, 1, 2, value -> false, value -> fail(), dropped::add, () -> true);
++        queue.add("a", "replacement", 2, 2, dropped::add);
++        queue.add("c", "third", 2, 2, dropped::add);
++        assertEquals(List.of("first"), dropped);
++        assertEquals(2, queue.size());
++    }
++
++    @Test void wallClockTimeoutExpiresEvenDuringBackoff() {
++        var queue = new DeferredWorkQueue<String, String>(2);
++        var dropped = new ArrayList<String>();
++        queue.add("a", "a", 0, 0, dropped::add);
++        queue.drain(0, DeferredWorkQueue.TIMEOUT_NANOS, 1, value -> fail(), value -> fail(), dropped::add, () -> true);
++        assertEquals(List.of("a"), dropped);
++        assertTrue(queue.isEmpty());
++    }
++
++    @Test void obeysWorkBudgetAndDefersSuccessorsToNextTick() {
++        var queue = new DeferredWorkQueue<String, String>(4);
++        var ran = new ArrayList<String>();
++        queue.add("a", "a", 0, 0, value -> fail());
++        queue.add("b", "b", 0, 0, value -> fail());
++        assertEquals(0, queue.drain(1, 0, 2, value -> true, ran::add, value -> fail(), () -> false));
++        assertEquals(1, queue.drain(1, 0, 1, value -> true, value -> {
++            ran.add(value);
++            queue.add("c", "c", 1, 0, ignored -> fail());
++        }, value -> fail(), () -> true));
++        queue.drain(1, 0, 4, value -> true, ran::add, value -> fail(), () -> true);
++        assertEquals(List.of("a", "b"), ran);
++        queue.drain(2, 0, 4, value -> true, ran::add, value -> fail(), () -> true);
++        assertEquals(List.of("a", "b", "c"), ran);
++    }
++
++    @Test void unloadAndReloadCleanupReleaseQueuedWork() {
++        var queue = new DeferredWorkQueue<String, String>(4);
++        queue.add("a", "world-a", 0, 0, value -> fail());
++        queue.add("b", "world-b", 0, 0, value -> fail());
++        queue.removeIf(value -> value.equals("world-a"));
++        assertEquals(1, queue.size());
++        queue.clear();
++        assertTrue(queue.isEmpty());
++    }
++}
+diff --git a/src/test/java/com/magmaguy/betterstructures/worldedit/ChunkReadinessTest.java b/src/test/java/com/magmaguy/betterstructures/worldedit/ChunkReadinessTest.java
+new file mode 100644
+index 0000000..8d4ad97
+--- /dev/null
++++ b/src/test/java/com/magmaguy/betterstructures/worldedit/ChunkReadinessTest.java
+@@ -0,0 +1,92 @@
++package com.magmaguy.betterstructures.worldedit;
++
++import com.magmaguy.betterstructures.MetadataHandler;
++import com.magmaguy.betterstructures.util.ChunkAccess;
++import com.magmaguy.betterstructures.util.ChunkFootprint;
++import org.bukkit.Bukkit;
++import org.bukkit.Chunk;
++import org.bukkit.Location;
++import org.bukkit.World;
++import org.bukkit.plugin.java.JavaPlugin;
++import org.junit.jupiter.api.Test;
++import java.lang.reflect.Field;
++import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++class ChunkReadinessTest {
++    @Test void missingChunkNeverUsesSynchronousRetrievalOrGeneratedQuery() {
++        World world = mock(World.class);
++        try (var bukkit = mockStatic(Bukkit.class)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            assertThrows(IllegalStateException.class, () -> ChunkAccess.loadedChunk(world, -1, 2));
++            assertFalse(ChunkAccess.generatedIfLoaded(world, -1, 2));
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++            verify(world, never()).isChunkGenerated(anyInt(), anyInt());
++        }
++    }
++
++    @Test void footprintsFloorNegativeFractionalCoordinatesAndOnlyInspectLoadedState() {
++        assertEquals(new ChunkFootprint(-2, -1, 1, 0), ChunkFootprint.blocks(-16.5, -.5, 16, 15.9));
++        World world = mock(World.class);
++        when(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
++        when(world.isChunkLoaded(-1, 0)).thenReturn(false);
++        try (var bukkit = mockStatic(Bukkit.class)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            assertFalse(new ChunkFootprint(-2, -1, 1, 0).isLoaded(world));
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++            verify(world, never()).getBlockAt(anyInt(), anyInt(), anyInt());
++        }
++    }
++
++    @Test void stalledAsyncLoadReturnsImmediatelyAndTimesOut() throws Exception {
++        World world = mock(World.class);
++        UUID id = UUID.randomUUID();
++        when(world.getUID()).thenReturn(id);
++        when(world.getChunkAtAsync(13, 26, true)).thenReturn(new CompletableFuture<>());
++        try (var bukkit = mockStatic(Bukkit.class); var readiness = new PasteChunkReadiness(world)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            bukkit.when(() -> Bukkit.getWorld(id)).thenReturn(world);
++            Location at = new Location(world, 13 * 16, 20, 26 * 16);
++            assertFalse(readiness.ready(at));
++            assertFalse(readiness.ready(at));
++            Field time = PasteChunkReadiness.class.getDeclaredField("requestedAt");
++            time.setAccessible(true);
++            time.setLong(readiness, System.nanoTime() - 61_000_000_000L);
++            assertThrows(IllegalStateException.class, () -> readiness.ready(at));
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++        }
++    }
++
++    @Test void completedAsyncLoadIsRecheckedBeforeTicketAndTicketReleasedOnClose() {
++        World world = mock(World.class);
++        Chunk chunk = mock(Chunk.class);
++        UUID id = UUID.randomUUID();
++        when(world.getUID()).thenReturn(id);
++        when(chunk.getX()).thenReturn(1);
++        when(chunk.getZ()).thenReturn(2);
++        var future = new CompletableFuture<Chunk>();
++        when(world.getChunkAtAsync(1, 2, true)).thenReturn(future);
++        MetadataHandler.PLUGIN = mock(JavaPlugin.class);
++        try (var bukkit = mockStatic(Bukkit.class); var readiness = new PasteChunkReadiness(world)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            bukkit.when(() -> Bukkit.getWorld(id)).thenReturn(world);
++            Location at = new Location(world, 16, 20, 32);
++            assertFalse(readiness.ready(at));
++            future.complete(chunk);
++            when(world.isChunkLoaded(1, 2)).thenReturn(true);
++            assertTrue(readiness.ready(at));
++            verify(chunk).addPluginChunkTicket(MetadataHandler.PLUGIN);
++            readiness.close();
++            verify(chunk).removePluginChunkTicket(MetadataHandler.PLUGIN);
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++        } finally { MetadataHandler.PLUGIN = null; }
++    }
++
++    @Test void liveWorldAccessRejectsWorkerThreads() {
++        try (var bukkit = mockStatic(Bukkit.class)) {
++            assertThrows(IllegalStateException.class, () -> ChunkAccess.loadedChunk(mock(World.class), 0, 0));
++        }
++    }
++}
+diff --git a/src/test/java/com/magmaguy/betterstructures/worldedit/TerrainReadinessTest.java b/src/test/java/com/magmaguy/betterstructures/worldedit/TerrainReadinessTest.java
+new file mode 100644
+index 0000000..cd7325b
+--- /dev/null
++++ b/src/test/java/com/magmaguy/betterstructures/worldedit/TerrainReadinessTest.java
+@@ -0,0 +1,45 @@
++package com.magmaguy.betterstructures.worldedit;
++
++import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
++import com.magmaguy.betterstructures.buildingfitter.util.Topology;
++import com.sk89q.worldedit.extent.clipboard.Clipboard;
++import com.sk89q.worldedit.math.BlockVector3;
++import org.bukkit.Bukkit;
++import org.bukkit.Location;
++import org.bukkit.World;
++import org.bukkit.util.Vector;
++import org.junit.jupiter.api.Test;
++import static org.junit.jupiter.api.Assertions.*;
++import static org.mockito.Mockito.*;
++
++class TerrainReadinessTest {
++    @Test void undergroundScanRejectsMissingNeighborBeforeReadingTerrainOrClipboardBlocks() {
++        World world = mock(World.class);
++        Clipboard clipboard = mock(Clipboard.class);
++        when(clipboard.getDimensions()).thenReturn(BlockVector3.at(33, 20, 33));
++        when(world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
++        when(world.isChunkLoaded(1, 1)).thenReturn(false);
++        try (var bukkit = mockStatic(Bukkit.class)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            assertThrows(IllegalStateException.class, () -> TerrainAdequacy.scan(3, clipboard,
++                    new Location(world, 8, 20, 8), new Vector(-16, -10, -16), TerrainAdequacy.ScanType.UNDERGROUND));
++            verify(world, never()).getBlockAt(anyInt(), anyInt(), anyInt());
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++            verify(clipboard, never()).getBlock(any());
++        }
++    }
++
++    @Test void surfaceTopologyRejectsMissingNeighborBeforeHeightQueries() {
++        World world = mock(World.class);
++        Clipboard clipboard = mock(Clipboard.class);
++        when(clipboard.getDimensions()).thenReturn(BlockVector3.at(33, 20, 33));
++        try (var bukkit = mockStatic(Bukkit.class)) {
++            bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
++            assertThrows(IllegalStateException.class, () -> Topology.scan(100, 3, clipboard,
++                    new Location(world, 8, 20, 8), new Vector(-16, -10, -16)));
++            verify(world, never()).getHighestBlockYAt(any(Location.class));
++            verify(world, never()).getHighestBlockAt(any(Location.class));
++            verify(world, never()).getChunkAt(anyInt(), anyInt());
++        }
++    }
++}
+diff --git a/validation/build-verification.json b/validation/build-verification.json
+new file mode 100644
+index 0000000..b6db92a
+--- /dev/null
++++ b/validation/build-verification.json
+@@ -0,0 +1,18 @@
++{
++  "base_commit": "8efd4a51ab1e8dd1c023969d2bcbd15c4f369fb7",
++  "build": "BUILD SUCCESSFUL",
++  "tests": {
++    "tests": 79,
++    "failures": 0,
++    "errors": 0,
++    "skipped": 0
++  },
++  "production_api": "org.spigotmc:spigot-api:26.3-R0.1-SNAPSHOT",
++  "test_api": "Paper26.2 + MockBukkit26.2 (existing dependencies)",
++  "production_class_version": 65,
++  "test_jdk": "jdk-25.0.4.1+1",
++  "jar": "build/libs/BetterStructures.jar",
++  "jar_sha256": "201fcf5aae4e8d9a4e9aa59c5760c24155de3f58dfe51362a0dfe46a1e3fe871",
++  "manual_purpur_test": "Not executed; procedure in chunk-safety-report.txt",
++  "baseline_build_failure": "Missing MagmaCore.instance.MatchInstance with EliteMobs10.9.7. Resolved with existing dependency updated to10.9.8."
++}
+diff --git a/validation/changes-by-file.txt b/validation/changes-by-file.txt
+new file mode 100644
+index 0000000..5dc944c
+--- /dev/null
++++ b/validation/changes-by-file.txt
+@@ -0,0 +1,119 @@
++.gitignore
++  Ignora JDKs/cache temporarios em .validation.
++
++build.gradle
++  Alinha EliteMobs compile/test de10.9.7 a10.9.8 para resolver incompatibilidade existente com MagmaCore snapshot; mantem APIs/toolchains.
++
++src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java
++  BoundingBox numerico, sem instanciar handles de blocos.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java
++  Separa inicializacao de fitting adiado, protege height query; conserva altitude e scoring.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java
++  Inicializacao/continuacao condicionadas a footprint completo, mantendo instancia/anchor; safety de callbacks e physics=false; paste worldId.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java
++  Separa inicializacao de fitting adiado; height query protegida e conserva validacoes/scoring.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java
++  Separa inicializacao de fitting adiado; coluna de altura protegida; busca/scoring intactos.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java
++  Separa inicializacao de fitting adiado para shallow/deep; Y escolhido uma vez e pontuacao somente com footprint loaded.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java
++  Consulta biome somente apos ChunkAccess.block.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java
++  Preflight antes da primeira leitura do volume; getType por block helper que recusa chunk ausente.
++
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java
++  Preflight antes das consultas de terreno/altura; height lookup protegido.
++
++src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java
++  Recupera chunk do jogador por helper carregado; fitting e adiado pelo mecanismo compartilhado.
++
++src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java
++  Remove consulta de altura desnecessaria de WORLD_CENTER (so X/Z sao usados).
++
++src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java
++  Usa teleportAsync com timeout, sem espera na main thread ou fallback sync.
++
++src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java
++  Tres chaves documentadas: shallow scanner enabled, maxscans/tick e budgetms; validacao dos valores.
++
++src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java
++  Mantem finally/ThreadLocal; documenta papel contra callbacks recursivos.
++
++src/main/java/com/magmaguy/betterstructures/listeners/DeferredChunkWork.java
++  Scheduler main-thread compartilhado com budget configuravel, guard, WARN/eviccao e limpeza por mundo/reload.
++
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java
++  Eventos so enfileiram; delega drain a DeferredChunkWork, dedup e cleanup; dungeon aguarda footprint completo.
++
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java
++  APIs com retorno imediato exigem destinos loaded antes de alterar blocos/spawn; physics=false para containers.
++
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java
++  Debug/raw vai a fila com readiness; mantem alinhamento min/origin; worldId e revalidacao de container apos evento.
++
++src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java
++  Expoe calculo de bounds para preflight; formula/geometria intacta.
++
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java
++  Debug de blocos/textos espera footprint loaded na fila principal, sem cargas sync.
++
++src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java
++  Valida chunk de destino antes de chamar API externa.
++
++src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java
++  Valida chunk de destino antes de chamar API externa.
++
++src/main/java/com/magmaguy/betterstructures/util/ChunkAccess.java
++  Main-thread guard, retrieval apenas loaded, biome/block/height seguros, generatedIfLoaded e request Paper async sem fallback.
++
++src/main/java/com/magmaguy/betterstructures/util/ChunkFootprint.java
++  Bounds inclusivos com floor para negativos/fracoes; verifica todos os chunks sem gerar.
++
++src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java
++  Requests async limitados, polling/timeouts, aguarda conclusao de camada, limpa futures e cancela ao atingir fila4096.
++
++src/main/java/com/magmaguy/betterstructures/util/DeferredWorkQueue.java
++  Fila FIFO limitada/deduplicada, backoff,16 tentativas, timeout60s, budget e limpeza testaveis sem Bukkit.
++
++src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java
++  Paste de entidades em fila incremental, com mesmo alinhamento origin-min; remove imports obsoletos.
++
++src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java
++  Remove fallback sync; timeout/limite retries, verifica future pronto e chunk loaded; tickets e cancelamento ao fechar.
++
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java
++  Paste raw incremental, readiness tambem para entidades; cap4096, limpeza por mundo, physics=false/sideeffects.none e worldId por operacao.
++
++src/test/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuardTest.java
++  Reentrancia recusada e guarda liberada apos excecao.
++
++src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java
++  Conta retrievals reais em vez de isChunkLoaded, mantendo assertions de nao pedir chunks de air/barrier.
++
++src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java
++  Carrega explicitamente destinos das fixtures de mobs; preserva assertions de centro/dificuldade.
++
++src/test/java/com/magmaguy/betterstructures/util/DeferredWorkQueueTest.java
++  Cinco casos de backoff/limites/dedup/eviccao/timeout/budget/sucessores/limpeza.
++
++src/test/java/com/magmaguy/betterstructures/worldedit/ChunkReadinessTest.java
++  Cinco casos de mocks: nenhum retrieval ausente, bounds negativos, future estagnado, tickets e threading.
++
++src/test/java/com/magmaguy/betterstructures/worldedit/TerrainReadinessTest.java
++  Regressao do watchdog em underground e topology: vizinho ausente antes de getBlock/height.
++
++validation/build-verification.json
++  Resultados medidos de build/testes, hash do jar e bytecode.
++
++validation/chunk-access-inventory.csv
++  Inventario completo da base, por ocorrencia/arquivo/linha/metodo/tratamento.
++
++validation/chunk-safety-report.txt
++  Fluxo, footprints, limites, compatibilidade, riscos, roteiro manual e coleta upstream.
+diff --git a/validation/chunk-access-inventory.csv b/validation/chunk-access-inventory.csv
+new file mode 100644
+index 0000000..b85b015
+--- /dev/null
++++ b/validation/chunk-access-inventory.csv
+@@ -0,0 +1,194 @@
++﻿arquivo_original,linha_original,metodo,codigo_original,tratamento
++src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java,59,getBlock,"return BoundingBox.of(lowestCorner.getBlock(), highestCorner.getBlock());","BoundingBox passou a usar coordenadas numericas, sem getBlock."
++src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java,59,getBlock,"return BoundingBox.of(lowestCorner.getBlock(), highestCorner.getBlock());","BoundingBox passou a usar coordenadas numericas, sem getBlock."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,46,getHighestBlockAt,"Location originalLocation = chunk.getWorld().getHighestBlockAt(chunk.getX() * 16 + 8, chunk.getZ() * 16 + 8).getLocation().add(new Vector(0, altitude, 0));","Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,62,getBlock,if (currentLocation.getBlock().getType().isAir()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,62,getType,if (currentLocation.getBlock().getType().isAir()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,70,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,70,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,71,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,71,getType,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,77,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,77,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,78,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,78,getType,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,107,getBlock,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java,107,getBiome,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,142,getBlock,"Block ground = corner.clone().add(x, y, z).getBlock();","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,143,getType,if (ground.getRelative(BlockFace.UP).getType().isSolid() && ground.getType().isSolid(),"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,143,getType,if (ground.getRelative(BlockFace.UP).getType().isSolid() && ground.getType().isSolid(),"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,144,getType,&& !SurfaceMaterials.ignorable(ground.getType())),"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,145,getType,"undergroundPedestalMaterials.merge(ground.getType(), 1, Integer::sum);","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,149,getBlock,"boolean up = corner.clone().add(x, schematicClipboard.getDimensions().y(), z).getBlock().getType().isSolid();","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,149,getType,"boolean up = corner.clone().add(x, schematicClipboard.getDimensions().y(), z).getBlock().getType().isSolid();",Clipboard ou tipo de entidade; nao carrega chunks.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,152,getBlock,"Block ground = corner.clone().add(x, up ? offset : -offset, z).getBlock();","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,153,getType,if (!ground.getRelative(BlockFace.UP).getType().isSolid() && ground.getType().isSolid()) {,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,153,getType,if (!ground.getRelative(BlockFace.UP).getType().isSolid() && ground.getType().isSolid()) {,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,154,getType,"surfacePedestalMaterials.merge(ground.getType(), 1, Integer::sum);","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,211,getEntities,if (props == null) props = schematicClipboard.getEntities().iterator();,Clipboard ou tipo de entidade; nao carrega chunks.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,249,newEditSession,entitySession = WorldEdit.getInstance().newEditSession(BukkitAdapter.adapt(base.getWorld()));,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,317,getBlock,"if (corner.clone().add(x, 0, z).getBlock().getType().isAir()) return;","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,317,getType,"if (corner.clone().add(x, 0, z).getBlock().getType().isAir()) return;","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,319,getBlock,"Block block = corner.clone().add(x, y, z).getBlock();","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,320,getType,if (!SurfaceMaterials.ignorable(block.getType())) break;,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,321,setType,block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()));,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,321,getType,block.setType(getPedestalMaterial(!block.getRelative(BlockFace.UP).getType().isSolid()));,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,327,getBlock,"Block block = corner.clone().add(x, schematicClipboard.getDimensions().y() + 1 + y, z).getBlock();","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,328,getType,if (!SurfaceMaterials.ignorable(block.getType()) || block.getType().isAir()) break;,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,328,getType,if (!SurfaceMaterials.ignorable(block.getType()) || block.getType().isAir()) break;,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,329,setType,block.setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,340,getBlock,if (!(chestLocation.getBlock().getState() instanceof Container container)) {,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,340,getState,if (!(chestLocation.getBlock().getState() instanceof Container container)) {,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,341,getBlock,"Logger.warn(""Expected a container for "" + chestLocation.getBlock().getType() + "" but didn't get it. Skipping this loot!"");","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,341,getType,"Logger.warn(""Expected a container for "" + chestLocation.getBlock().getType() + "" but didn't get it. Skipping this loot!"");","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,345,getBlock,boolean isBarrel = container.getBlock().getType() == Material.BARREL;,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,345,getType,boolean isBarrel = container.getBlock().getType() == Material.BARREL;,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,362,update,container.update(true);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,368,getBlock,signLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,368,setType,signLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,371,spawnEntity,"Entity entity = signLocation.getWorld().spawnEntity(signLocation, schematicContainer.getVanillaSpawns().get(entityPosition));","Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,378,getType,entity.getType().equals(EntityType.END_CRYSTAL)) {,Clipboard ou tipo de entidade; nao carrega chunks.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,386,getBlock,eliteLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,386,setType,eliteLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,408,getBlock,markerLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,408,setType,markerLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,415,getBlock,mobLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java,415,setType,mobLocation.getBlock().setType(Material.AIR);,"Preparation/Finishing fazem readiness por destino, async com timeout/ticket; callbacks revalidam chunk; escrita sem physics."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,34,getHighestBlockYAt,originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,39,getBlock,if (!originalLocation.getBlock().isLiquid()) return;,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,44,getBlock,if (originalLocation.getBlock().getType() != Material.LAVA) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,44,getType,if (originalLocation.getBlock().getType() != Material.LAVA) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,48,getBlock,"if (!originalLocation.clone().add(new Vector(0, i, 0)).getBlock().getType().isAir()) {","Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,48,getType,"if (!originalLocation.clone().add(new Vector(0, i, 0)).getBlock().getType().isAir()) {","Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,55,getBlock,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java,55,getBiome,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java,34,getHighestBlockYAt,originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java,37,getBlock,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java,37,getBiome,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,60,getBlock,if (currentLocation.getBlock().getType().isSolid()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,60,getType,if (currentLocation.getBlock().getType().isSolid()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,68,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,68,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,69,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,69,getType,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,75,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,75,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,76,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,76,getType,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,108,getBlock,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,108,getBiome,"//Bukkit.getLogger().info(""Did not spawn structure in biome "" + originalLocation.getBlock().getBiome() + "" because no valid schematics exist for it."");",Comentario; sem execucao.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,169,getBlock,if (currentLocation.getBlock().getType().isSolid()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,169,getType,if (currentLocation.getBlock().getType().isSolid()) {,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,177,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,177,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,178,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,178,getType,currentLocation.getBlock().getType() == Material.BEDROCK ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,184,getBlock,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,184,getType,if (currentLocation.getBlock().getType() == Material.VOID_AIR ||,"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,185,getBlock,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java,185,getType,currentLocation.getBlock().getType() == Material.BEDROCK),"Inicializacao condicionada ao chunk de origem; fitting aguarda footprint inteiro (searchRadius=1 + dimensoes + offset), preservando escolha/Y."
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java,22,getBlock,Object biome = naiveAnchorLocation.getBlock().getBiome();,ChunkAccess.block recusa chunk ausente; selecao somente na inicializacao ja pronta.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java,22,getBiome,Object biome = naiveAnchorLocation.getBlock().getBiome();,ChunkAccess.block recusa chunk ausente; selecao somente na inicializacao ja pronta.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java,36,getBlock,"BlockState schematicBlockStateAtPosition = schematicClipboard.getBlock(BlockVector3.at(x, y, z).add(minimumPoint));",Leitura de Clipboard em memoria; nao carrega chunks.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java,55,getBlock,Material terrain = projectedWorldLocation.getBlock().getType();,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java,55,getType,Material terrain = projectedWorldLocation.getBlock().getType();,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,52,getBlock,while (SurfaceMaterials.ignorable(projectedLocation.getBlock().getType())) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,52,getType,while (SurfaceMaterials.ignorable(projectedLocation.getBlock().getType())) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,53,getBlock,if (projectedLocation.getBlock().getType().equals(Material.VOID_AIR)) return 0;,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,53,getType,if (projectedLocation.getBlock().getType().equals(Material.VOID_AIR)) return 0;,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,61,getBlock,switch (projectedLocation.getBlock().getType()) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,61,getType,switch (projectedLocation.getBlock().getType()) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,76,getHighestBlockAt,return location.getWorld().getHighestBlockAt(location).getLocation();,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,81,getBlock,if (SurfaceMaterials.ignorable(location.getBlock().getType())) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,81,getType,if (SurfaceMaterials.ignorable(location.getBlock().getType())) {,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,102,getBlock,if (!(!SurfaceMaterials.ignorable(location.getBlock().getType()) &&,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,102,getType,if (!(!SurfaceMaterials.ignorable(location.getBlock().getType()) &&,Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,103,getBlock,"SurfaceMaterials.ignorable(location.getBlock().getLocation().add(new Vector(0, 1, 0)).getBlock().getType())))",Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,103,getBlock,"SurfaceMaterials.ignorable(location.getBlock().getLocation().add(new Vector(0, 1, 0)).getBlock().getType())))",Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,103,getType,"SurfaceMaterials.ignorable(location.getBlock().getLocation().add(new Vector(0, 1, 0)).getBlock().getType())))",Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,107,getBlock,"if (SurfaceMaterials.ignorable(location.clone().add(new Vector(0, i, 0)).getBlock().getType()))",Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java,107,getType,"if (SurfaceMaterials.ignorable(location.clone().add(new Vector(0, i, 0)).getBlock().getType()))",Preflight da area completa antes da primeira leitura; chamador aguarda footprint; ChunkAccess protege leituras diretas/altura.
++src/main/java/com/magmaguy/betterstructures/chests/ChestContents.java,164,getType,if (existing == null || existing.getType().isAir()) freeSlots.add(i);,"ItemStack/Inventory, nao acessa chunk."
++src/main/java/com/magmaguy/betterstructures/chests/ChestContents.java,206,getType,if (itemStack != null && itemStack.getType() != Material.AIR) {,"ItemStack/Inventory, nao acessa chunk."
++src/main/java/com/magmaguy/betterstructures/commands/LootifyCommand.java,94,getType,if (itemStack == null || itemStack.getType().isAir()) {,"ItemStack/Inventory, nao acessa chunk."
++src/main/java/com/magmaguy/betterstructures/commands/LootifyCommand.java,104,getType,info = itemStack.getType().toString();,"ItemStack/Inventory, nao acessa chunk."
++src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java,65,getChunk,"FitAnything.commandBasedCreation(player.getLocation().getChunk(), structureType, commandSchematicContainer);",ChunkAccess.loadedChunk verifica origem antes do fitting adiado.
++src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java,52,getHighestBlockYAt,"center = new Location(world, 0, world.getHighestBlockYAt(0, 0), 0);",WORLD_CENTER nao precisa de altura para calcular X/Z; consulta removida.
++src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java,35,teleport,"commandData.getPlayerSender().teleport(new Location(world, x, y, z));","Paper teleportAsync por reflexao; timeout60s, sem espera sync e sem fallback sync."
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,63,getChunk,Chunk chunk = event.getChunk();,Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,171,getChunkAt,"Chunk chunk = world.getChunkAt(key.x(), key.z());",Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,275,getChunkAt,"dungeonScanner(world.getChunkAt(loadingChunkKey.x(), loadingChunkKey.z()));",Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,396,getBlock,var startLocation = chunk.getBlock(,Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,405,isChunkGenerated,"coordinate -> chunk.getWorld().isChunkGenerated(coordinate.x(), coordinate.z()),",Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java,424,isChunkGenerated,"coordinate -> chunk.getWorld().isChunkGenerated(coordinate.x(), coordinate.z()))",Evento apenas enfileira coordenadas; drain compartilhado limitado; dungeon aguarda footprint; isChunkGenerated somente se loaded.
++src/main/java/com/magmaguy/betterstructures/modules/BlockAttachedEntityPaste.java,42,createEntity,"return super.createEntity(location, withPosition(entity, location));",Transformacao de dados/estado de entidade do Clipboard; destino do copy protegido pelo readiness do paste modular.
++src/main/java/com/magmaguy/betterstructures/modules/BlockAttachedEntityPaste.java,55,getType,"return new BaseEntity(entity.getType(), LazyReference.computed(positioned));",Transformacao de dados/estado de entidade do Clipboard; destino do copy protegido pelo readiness do paste modular.
++src/main/java/com/magmaguy/betterstructures/modules/BlockAttachedEntityPaste.java,61,getState,BaseEntity state = entity.getState();,Transformacao de dados/estado de entidade do Clipboard; destino do copy protegido pelo readiness do paste modular.
++src/main/java/com/magmaguy/betterstructures/modules/BlockAttachedEntityPaste.java,66,getType,"BaseEntity rotatedState = new BaseEntity(state.getType(), LazyReference.computed(rotated));",Transformacao de dados/estado de entidade do Clipboard; destino do copy protegido pelo readiness do paste modular.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,127,getBlock,chestLocation.getBlock().setType(Material.CHEST);,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,127,setType,chestLocation.getBlock().setType(Material.CHEST);,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,128,getBlock,chests.add(chestLocation.getBlock());,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,136,getBlock,barrelLocation.getBlock().setType(Material.BARREL);,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,136,setType,barrelLocation.getBlock().setType(Material.BARREL);,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java,137,getBlock,barrels.add(barrelLocation.getBlock());,Containers/bosses das APIs de retorno imediato exigem chunks loaded (fail-fast); exits raw vao ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,157,newEditSession,try (EditSession editSession = WorldEdit.getInstance().newEditSession(adaptedWorld)) {,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,176,setBlock,"editSession.setBlock(worldPos, baseBlock);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,253,getBlock,if (pasteLocation.getBlock().getType().isSolid()) return null;,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,253,getType,if (pasteLocation.getBlock().getType().isSolid()) return null;,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,382,getEntities,entityCursor = module.clipboard().getEntities().iterator();,"Entidades do Clipboard, em memoria."
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,445,setBlockInNativeDataPalette,"NMSManager.getAdapter().setBlockInNativeDataPalette(world, block.location().getBlockX(),",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,447,getBlock,"else if (phase == 1 && !fast) block.location().getBlock().setBlockData(block.blockData(), false);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,447,setBlockData,"else if (phase == 1 && !fast) block.location().getBlock().setBlockData(block.blockData(), false);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,465,newEditSession,try (EditSession edit = WorldEdit.getInstance().newEditSession(BukkitAdapter.adapt(world))) {,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,468,setBlock,"edit.setBlock(BlockVector3.at(entry.location().getBlockX(), entry.location().getBlockY(),",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,475,getBlock,Block block = entry.location().getBlock();,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,476,setType,"block.setType(entry.material(), false);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,477,getState,if (block.getState() instanceof Container container),Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,487,getBlock,if (entry.location().getBlock().getType() == Material.BARREL,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,487,getType,if (entry.location().getBlock().getType() == Material.BARREL,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,488,getBlock,"&& entry.location().getBlock().getState() instanceof Container container) fill(container, treasure);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,488,getState,"&& entry.location().getBlock().getState() instanceof Container container) fill(container, treasure);",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,493,spawnEntity,"org.bukkit.entity.Entity entity = world.spawnEntity(entry.location(), entry.entityType());",Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java,524,update,if (!event.isCancelled()) container.update(true);,Paste modular incremental protegido por readiness; paste debug/raw usa mesma fila; NMS e NBT somente apos prontidao; container revalidado apos evento.
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java,236,spawnEntity,"TextDisplay textDisplay = (TextDisplay) world.spawnEntity(adjustedLocation, EntityType.TEXT_DISPLAY);",Debug de blocos/textos aguarda footprint na fila main-thread; debug schematic vai ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java,307,getBlock,blockLocation.getBlock().setType(material);,Debug de blocos/textos aguarda footprint na fila main-thread; debug schematic vai ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java,307,setType,blockLocation.getBlock().setType(material);,Debug de blocos/textos aguarda footprint na fila main-thread; debug schematic vai ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java,309,getBlock,blockLocation.getBlock().setType(Material.AIR);,Debug de blocos/textos aguarda footprint na fila main-thread; debug schematic vai ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java,309,setType,blockLocation.getBlock().setType(Material.AIR);,Debug de blocos/textos aguarda footprint na fila main-thread; debug schematic vai ao paste incremental.
++src/main/java/com/magmaguy/betterstructures/schematics/SchematicContainer.java,91,getBlock,BlockState weBlockState = clipboard.getBlock(translatedLocation);,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/thirdparty/WorldGuard.java,150,getBlock,"if (checkArea(event.getBlock().getLocation(), event.getPlayer())) event.setCancelled(true);",Event#getBlock retorna handle do bloco do evento; getLocation somente coordenadas.
++src/main/java/com/magmaguy/betterstructures/thirdparty/WorldGuard.java,155,getBlock,"if (checkArea(event.getBlock().getLocation(), event.getPlayer())) event.setCancelled(true);",Event#getBlock retorna handle do bloco do evento; getLocation somente coordenadas.
++src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java,268,getChunkAt,"Chunk chunk = world.getChunkAt(chunkX, chunkZ);","Carga sync e Chunk.load removidos; requests async, max4/tick e32 pendentes, timeout60s; fila4096; falha cancela sem alterar borda."
++src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java,270,load,"if (!chunk.load(true)) throw new IllegalStateException(""Chunk load was refused"");","Carga sync e Chunk.load removidos; requests async, max4/tick e32 pendentes, timeout60s; fila4096; falha cancela sem alterar borda."
++src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java,360,getChunk,"String chunkKey = event.getChunk().getX() + "","" + event.getChunk().getZ();","Carga sync e Chunk.load removidos; requests async, max4/tick e32 pendentes, timeout60s; fila4096; falha cancela sem alterar borda."
++src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java,360,getChunk,"String chunkKey = event.getChunk().getX() + "","" + event.getChunk().getZ();","Carga sync e Chunk.load removidos; requests async, max4/tick e32 pendentes, timeout60s; fila4096; falha cancela sem alterar borda."
++src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java,280,newEditSession,try (EditSession editSession = WorldEdit.getInstance().newEditSession(adaptedWorld)) {,Clipboard anonimo em memoria; paste de entidades foi movido para fila com readiness individual.
++src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java,43,getChunkAt,"hold(world.getChunkAt(x, z));",getChunkAt somente via ChunkAccess.loadedChunk apos isChunkLoaded; fallback sync removido; future isDone antes de join; timeout60s/16tentativas.
++src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java,62,getChunkAt,"try { request.complete(world.getChunkAt(x, z)); }",getChunkAt somente via ChunkAccess.loadedChunk apos isChunkLoaded; fallback sync removido; future isDone antes de join; timeout60s/16tentativas.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,139,newEditSession,try (EditSession editSession = WorldEdit.getInstance().newEditSession(world)) {,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,152,getBlock,return WorldEditUtils.isSolid(schematicClipboard.getBlock(clipboardPosition));,Clipboard em memoria; nao carrega chunks.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,171,getBlock,"Block worldBlock = adjustedLocation.clone().add(new Vector(x, y, z)).getBlock();",Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,177,getType,if (WorldEditUtils.isAir(blockState) && worldBlock.getType().isAir()) {,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,199,getType,if (!worldBlock.getType().isSolid()) {,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,319,getType,"if (BLOCK_ENTITY_MATERIALS.computeIfAbsent(destination.getType(),",Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,323,getState,destination.getState();,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,325,setBlockData,destination.setBlockData(pasteBlock.blockData());,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java,327,newEditSession,try (EditSession editSession = WorldEdit.getInstance().newEditSession(,Paste incremental com readiness antes de Bukkit/WorldEdit; paste raw entrou na fila; NBT sideEffects.none; physics=false.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicClipboardCache.java,119,update,"digest.update(buffer, 0, read);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,131,update,"sha1.update(buffer, 0, read);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,132,update,"sha256.update(buffer, 0, read);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,145,load,clipboard = Schematic.load(snapshot.toFile());,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,235,update,"while ((read = input.read(buffer)) != -1) digest.update(buffer, 0, read);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,353,getEntities,for (com.sk89q.worldedit.entity.Entity entity : clipboard.getEntities()) {,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,355,getState,com.sk89q.worldedit.entity.BaseEntity state = entity.getState();,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,356,getType,String type = state == null || state.getType() == null,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,358,getType,: state.getType().id();,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,418,getEntities,for (com.sk89q.worldedit.entity.Entity entity : clipboard.getEntities()),Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,428,getState,com.sk89q.worldedit.entity.BaseEntity state = entity.getState();,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,459,getEntities,return corrected(delegate.getEntities());,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,465,getEntities,return corrected(delegate.getEntities(region));,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,472,createEntity,"return delegate.createEntity(location, entity);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,512,getBlock,return delegate.getBlock(position);,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,522,getBiome,return delegate.getBiome(position);,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,528,setBlock,"return delegate.setBlock(position, block);",Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
++src/main/java/com/magmaguy/betterstructures/worldedit/SchematicDiskCache.java,568,getState,return delegate.getState();,Clipboard/NBT/hash em memoria; nao e acesso ao mundo vivo.
+diff --git a/validation/chunk-safety-report.txt b/validation/chunk-safety-report.txt
+new file mode 100644
+index 0000000..95f52fa
+--- /dev/null
++++ b/validation/chunk-safety-report.txt
+@@ -0,0 +1,197 @@
++BetterStructures 2.7.7 - correcao de espera sincrona por chunks
++Base: 8efd4a51ab1e8dd1c023969d2bcbd15c4f369fb7
++
++Diagnostico
++A fila anterior verificava apenas o chunk de origem antes de executar todos os fitters.
++FitUndergroundBuilding pesquisa anchors deslocados de -16 a +16 blocos em X/Z e
++TerrainAdequacy projeta o volume inteiro do schematic. Ler getType em qualquer
++chunk ausente acionava getChunk(FULL)/syncLoad na main thread. O listener era
++adiado, mas o adiamento por si so nao tornava os vizinhos seguros.
++
++Inventario
++chunk-access-inventory.csv lista 193 ocorrencias em 27 arquivos da revisao original,
++com arquivo, linha, metodo, trecho e tratamento individual. Inclui handles e falsos
++positivos (ItemStack, estados/entidades de Clipboard, comentarios), explicitamente
++classificados para nao confundi-los com leituras de mundo vivo. Chamadas encadeadas
++na mesma linha aparecem separadamente. Tambem inclui setters, teleport, WorldEdit,
++NMS, tickets pelo caminho de readiness e isChunkGenerated.
++O grep nao encontrou World#getNearbyEntities nem World#getEntities neste codigo;
++os getEntities encontrados sao de clipboards. Location#getBlock/World#getBlockAt
++podem apenas construir handles; getType/getState/getBiome e setters sobre eles e
++que tornam perigoso o acesso ao chunk ausente.
++
++Fluxo novo
++ChunkLoadEvent somente registra coordenadas/UUID e enfileira uma operacao.
++DeferredChunkWork executa uma fila compartilhada na main thread, fora do callback
++de chunk load, com limites de quantidade e de tempo. Chunks repetidos sao deduplicados.
++Inicializacao de cada fitter aguarda sua coluna de origem; entao escolhe schematic,
++bioma e altitude como antes. Uma continuacao ret?m esse fitter/anchor e aguarda o
++footprint completo, sem repetir sorteios, pontuacao ou tipos ja concluidos.
++O scan nao solicita novos chunks: aguarda carga natural por jogadores/servidor.
++Assim ele nao expande a geracao recursivamente na borda da exploracao.
++Dungeons tambem aguardam seu footprint antes de consultar o estado de geracao.
++
++Footprint
++searchRadius=1; scanStep=3 permanece inalterado. Underground (shallow/deep), sky e
++liquid podem investigar os nove anchors num grid 3x3; surface pesquisa uma cruz.
++O preflight usa uma uniao retangular conservadora, cobrindo tambem a cruz inteira.
++Para anchor A, offset O=minimumPoint-origin e dimensoes W/D:
++ Xmin=min(Ax, Ax+Ox-16); Xmax=max(Ax, Ax+Ox+16+W-1)
++ Zmin=min(Az, Az+Oz-16); Zmax=max(Az, Az+Oz+16+D-1)
++Os extremos sao floor e depois >>4, incluindo coordenadas negativas e offsets
++nao centrados. Nao ha um raio fixo de chunks: depende do schematic e seu origin.
++Por exemplo, W=D=33, O=(-16,-16), anchor no centro do chunk: maximo 5x5 chunks.
++Todas as sondagens de altura/Nether/pedestal sao verticais, sem ampliar X/Z.
++Paste usa prontidao individual por bloco/coluna/entidade; destinos de entidades
++fora do volume tambem sao tratados individualmente.
++O footprint de dungeon usa os mesmos bounds da reserva existente:
++ localMin=(1-radius)*moduleSize-moduleSize/2
++ localMax=(radius-1)*moduleSize-moduleSize/2+moduleSize-1.
++
++Guard e threading
++A guarda ThreadLocal foi mantida e centralizada no drain compartilhado. Nosso
++codigo nao precisa mais entrar no managedBlock para scan; a guarda continua util
++contra callbacks de terceiros que executem o scheduler recursivamente. Sempre e
++liberada no finally, inclusive em falhas. Eventos novos durante a guarda apenas
++enfileiram trabalho; nao fazem scan inline nem suprimem cargas async normais.
++ChunkAccess exige a main thread, verifica isChunkLoaded antes de getChunkAt e
++recusa acesso se faltar chunk. TerrainAdequacy/Topology fazem preflight adicional
++na entrada publica antes da primeira leitura. isChunkGenerated so e chamado para
++chunks loaded: a implementacao CraftWorld pode esperar IO/managedBlock em outros.
++Nao foi necessario usar ChunkSnapshot: as leituras continuam na main thread,
++com preflight sem yield entre verificacao e leitura, preservando o scoring.
++
++Limites e configuracao
++O config.yml e criado/atualizado pelo DefaultConfig/ConfigurationEngine, como ja
++era feito no projeto; nao existe um resource config.yml estatico.
++Novas chaves, com comentarios e validacao de limites:
++ shallowUndergroundScannerEnabled: true
++ maxChunkScansPerTick: 2               # 1..32 operacoes de scan/readiness por tick
++ chunkScanBudgetMilliseconds: 2.0     # 0.1..10 ms
++A flag afeta apenas o scanner natural shallow; comandos manuais continuam disponiveis.
++O orcamento e verificado ENTRE operacoes, nao interrompe uma pontuacao em andamento.
++Um unico fitting de schematic enorme ainda pode exceder 2ms por CPU; este patch
++elimina espera por geracao, nao transforma toda pontuacao em corrotina.
++Fila compartilhada: 4096 operacoes; eviccao FIFO da mais antiga com WARN.
++Retries: ate 16 verificacoes, backoff 2,4,8,16,32,64,100,... ticks, timeout real 60s.
++Idade e ordem FIFO nao se renovam quando o trabalho e reenfileirado/deduplicado.
++Ao esgotar limite, WARN inclui descricao, mundo/UUID e bounds de chunks.
++Reload limpa continuacoes de conteudo antigo; eventos durante reload podem entrar
++na fila pausada. onDisable e WorldUnloadEvent liberam filas/tickets do mundo.
++
++Paste e pregeracao
++PasteChunkReadiness tem um futuro async por vez; so faz join APOS isDone.
++Chunks retornados sao revalidados antes do ticket, removido ao fechar. Falhas,
++timeout60s e limite16 tentativas abortam a operacao, sem anunciar sucesso.
++O fallback Spigot getChunkAt no proximo tick foi removido: um tick posterior ainda
++seria uma carga sincrona. Sem API async, a operacao falha com log.
++Nao se usa allOf porque nao existe lote de futures para scans: scans nao carregam;
++o paste pede um unico destino por vez, reduzindo pressao sobre tickets/geracao.
++Raw WorldEdit paste, exits e entidades tambem entraram na fila incremental.
++SideEffectSet.none e physics=false evitam cascatas de atualizacao de vizinhos ao
++escrever; redstone/blocos dependentes podem aguardar uma atualizacao normal.
++Pregeracao usa requests async (4 por tick, ate32 pendentes), polling main-thread,
++timeout60s, fila de espera ate4096. Excesso/falha cancela sem mudar a world border.
++Cancelar um CompletableFuture so abandona a espera do plugin; nao garante cancelar
++uma tarefa de geracao interna que o servidor ja tenha iniciado.
++Teleport usa Paper teleportAsync, timeout60s e nao faz espera bloqueante.
++
++Limites de compatibilidade e risco restante
++Nao restou getChunkAt/load/teleport sincrono NAO PROTEGIDO no codigo proprio auditado.
++getChunkAt continua sendo usado apenas para recuperar chunks comprovadamente loaded.
++As APIs publicas legadas ModularWorld.spawnChests/spawnBarrels/spawnInstancedEntities
++retornam listas imediatamente: agora exigem destinos loaded e lancam excecao se nao
++estiverem. Nao e possivel manter retorno imediato e adiar a mesma chamada sem mudar
++o contrato. O dono externo da instancia deve carregar async e chamar novamente.
++As entradas diretas EliteMobs/MythicMobs e utilitarios de terreno tambem falham cedo
++se chamados fora de seu contrato; os caminhos internos de geracao usam filas prontas.
++Callbacks de outros plugins e o codigo interno de WorldEdit/EliteMobs/MythicMobs/NMS
++nao sao controlados por este repositorio. Nosso destino esta pronto antes de cada
++chamada, mas nao posso garantir que esses componentes nao consultem outros chunks.
++Um watchdog originado numa chamada transitiva desses componentes precisa de sua
++stack inteira; desativar mobs como solucao permanente mudaria a geracao solicitada.
++Paste abortado pode deixar estrutura parcialmente colocada; nao existe rollback
++novo e nenhuma carga sync e feita para tentar conclui-la a qualquer custo.
++O budget por tick e cooperativo. Validacao em servidor real continua obrigatoria.
++
++Build e validacao
++O build original tambem falhou em ModularWorld: EliteMobs10.9.7 referencia
++MagmaCore.instance.MatchInstance, ausente do snapshot2.2.0 atualmente publicado.
++Foi reproduzido num checkout do HEAD em .validation/baseline, com o mesmo cache.
++A dependencia EXISTENTE EliteMobs (compileOnly e tests) foi alinhada a10.9.8, a versao
++do servidor do usuario, resolvendo a incompatibilidade; nenhuma dependencia nova.
++Compilacao usa Spigot API26.3 e bytecode Java21; compativel com a JVM Java25.
++Testes usam JDK25, Paper26.2 e MockBukkit26.2 ja previstos no build. Essas simulacoes
++nao substituem uma execucao em Purpur26.3. api-version1.21.4 foi preservada: usa
++somente contratos publicos compativeis, e as extensoes Paper sao chamadas por reflexao.
++A rodada final de build/testes e detalhada em build-verification.json; o jar sombreado
++esta em build/libs/BetterStructures.jar e o relatorio em build/reports/tests/test/.
++Testes novos: FIFO/dedup, backoff, maxattempts, timeout com relogio controlado,
++orcamento, sucessores no tick seguinte, limpeza, acesso off-thread, carga async
++estagnada, revalidacao/ticket, terreno/topologia com vizinho ausente, reentrancia.
++Duas fixtures existentes agora carregam explicitamente os destinos de mobs e
++contam recuperacoes de chunk, nao as sondagens isChunkLoaded que nao carregam.
++
++Roteiro manual (NAO executado nesta sessao)
++1. Em uma pasta de teste Linux, instalar Purpur26.3-2645-a2e4e44, Java25,
++   WorldEdit7.4.6-beta-02, o jar corrigido e spark. Comecar sem EliteMobs para isolar
++   terrain/paste; repetir com EliteMobs10.9.8 e todos os packs do servidor original.
++2. Gerar um mundo novo com seed fixa, overworld, view-distance10/simulation-distance4,
++   mesmas configuracoes/packs. Registrar java-version, /version e SHA256 dos jars.
++3. Ativar shallow e os budgets padrao; iniciar com -Dpaper.debug-sync-loads=true.
++   Esse diagnostico oficial e mais direto que inferir ausencia de cargas por amostras.
++4. /spark profiler start --timeout 600 --thread * --interval 1 --force-java-sampler
++   Nao usar --ignore-sleeping: queremos enxergar tambem thread estacionada/esperando.
++5. Voar em spectator/creative e com elytra em varias direcoes por terreno inedito
++   durante10 minutos; atravessar fronteiras/coord negativas; parar para deixar chunks
++   estabilizarem e confirmar estruturas superficiais, shallow/deep, liquid e sky.
++6. No spark/logs, procurar ServerChunkCache.syncLoad, getChunkFallback e managedBlock.
++   Nenhuma carga sync pode ter como chamador um scan/readiness/paste proprio de BS.
++   Inspecionar tambem chamadas BS -> terceiros; coletar stack se aparecerem.
++   Amostragem sem ocorrencias isoladamente NAO prova ausencia absoluta; cruzar com
++   debug-sync-loads, dumps e os testes que recusam retrieval ausente.
++7. Confirmar ausencia de watchdog/exit70, observar MSPT e fila descartada so quando
++   ha chunks ausentes por tempo suficiente. Ao esgotar retries, deve haver WARN com
++   mundo/bounds e o servidor deve continuar respondendo. Retornar aos chunks antes
++   do timeout deve permitir scan sem duplicar estruturas ja concluidas.
++8. Repetir com shallowUndergroundScannerEnabled=false: outros tipos continuam;
++   nao devem surgir novos shallow naturais. Depois reativar em terreno novo.
++9. Executar comandos place, pregenerate/cancelPregenerate, teleport, debug modular,
++   dungeons e exits; verificar NBT, entidades, loot e redstone apos physics=false.
++10. Enquanto voa, fazer reload DE CONTEUDO do plugin e unload de um mundo secundario.
++    Confirmar cancelamento/liberacao de tickets e ausencia de referencias/tarefas
++    desse mundo. Desativar/reiniciar o plugin e confirmar nenhuma fila antiga.
++11. Para reproduzir estagnacao sem bloquear main, usar fixture instrumentada cujo
++    getChunkAtAsync nao conclui. ChunkReadinessTest cobre este cenario deterministicamente;
++    em servidor normal nao existe comando confiavel para produzir exatamente o deadlock.
++
++Estagnacao dos vizinhos e coleta para upstream
++Pelos dados fornecidos, (13,26) depende de (13,27)/(12,27), e (9,22) de (8,23).
++Vizinhos terrain com requested_generation/generation_task=null, zero generation
++tasks e workers ociosos sao consistentes com perda/estagnacao de dependencias do
++chunk system. A evidencia nao prova quem produziu esse estado. O syncLoad de BS
++expoe a estagnacao e pode ter desencadeado uma sequencia problematica de tickets/
++reentrancia. Tambem pode haver um defeito fora do plugin (Purpur/Paper/Moonrise,
++worldgen, datapack, outro plugin, IO). O patch remove a espera do BS, mas NAO repara
++as dependencias internas do servidor nem impede outro plugin de esperar nelas.
++Coletar antes de atualizar ou alterar o ambiente de reproducao:
++- latest.log completo desde o boot, logs anteriores/stack watchdog completa e o
++  dump original; dois ou mais /paper debug chunks separados por5-10s se possivel.
++- jcmd PID Thread.print -l repetido durante a estagnacao (incluindo workers),
++  JFR curto e report spark com threads em espera; nao apenas o trecho da main.
++- /version completo, lista de plugins/versoes e SHA256, WorldEdit build exato,
++  java -version/distribuicao/flags, CPUs visiveis/quota container, logs de IO/disk.
++- server.properties, bukkit/spigot/paper-global/paper-world-defaults/purpur configs,
++  configs de geracao do mundo/plugin e overrides; remover senhas antes de compartilhar.
++- seed, generator, datapacks habilitados com versoes/SHA256, feature flags,
++  level.dat e copia dos region/poi/entities que contem os chunks afetados.
++- comparar mesma seed/datapacks: Purpur sem BS; Purpur apenas BS+WorldEdit+spark;
++  depois EliteMobs e demais plugins; comparar Paper equivalente, sem mudar tudo
++  simultaneamente. Um incidente sem BS reforca a hipotese de causa externa.
++
++Referencias oficiais verificadas
++https://jd.papermc.io/paper/26.3/org/bukkit/World.html
++https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
++https://docs.papermc.io/paper/reference/system-properties/#paperdebug-sync-loads
++https://docs.papermc.io/paper/reference/commands/
++https://spark.lucko.me/docs/Command-Usage

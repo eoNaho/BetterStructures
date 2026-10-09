@@ -1,0 +1,197 @@
+BetterStructures 2.7.7 - correcao de espera sincrona por chunks
+Base: 8efd4a51ab1e8dd1c023969d2bcbd15c4f369fb7
+
+Diagnostico
+A fila anterior verificava apenas o chunk de origem antes de executar todos os fitters.
+FitUndergroundBuilding pesquisa anchors deslocados de -16 a +16 blocos em X/Z e
+TerrainAdequacy projeta o volume inteiro do schematic. Ler getType em qualquer
+chunk ausente acionava getChunk(FULL)/syncLoad na main thread. O listener era
+adiado, mas o adiamento por si so nao tornava os vizinhos seguros.
+
+Inventario
+chunk-access-inventory.csv lista 193 ocorrencias em 27 arquivos da revisao original,
+com arquivo, linha, metodo, trecho e tratamento individual. Inclui handles e falsos
+positivos (ItemStack, estados/entidades de Clipboard, comentarios), explicitamente
+classificados para nao confundi-los com leituras de mundo vivo. Chamadas encadeadas
+na mesma linha aparecem separadamente. Tambem inclui setters, teleport, WorldEdit,
+NMS, tickets pelo caminho de readiness e isChunkGenerated.
+O grep nao encontrou World#getNearbyEntities nem World#getEntities neste codigo;
+os getEntities encontrados sao de clipboards. Location#getBlock/World#getBlockAt
+podem apenas construir handles; getType/getState/getBiome e setters sobre eles e
+que tornam perigoso o acesso ao chunk ausente.
+
+Fluxo novo
+ChunkLoadEvent somente registra coordenadas/UUID e enfileira uma operacao.
+DeferredChunkWork executa uma fila compartilhada na main thread, fora do callback
+de chunk load, com limites de quantidade e de tempo. Chunks repetidos sao deduplicados.
+Inicializacao de cada fitter aguarda sua coluna de origem; entao escolhe schematic,
+bioma e altitude como antes. Uma continuacao ret?m esse fitter/anchor e aguarda o
+footprint completo, sem repetir sorteios, pontuacao ou tipos ja concluidos.
+O scan nao solicita novos chunks: aguarda carga natural por jogadores/servidor.
+Assim ele nao expande a geracao recursivamente na borda da exploracao.
+Dungeons tambem aguardam seu footprint antes de consultar o estado de geracao.
+
+Footprint
+searchRadius=1; scanStep=3 permanece inalterado. Underground (shallow/deep), sky e
+liquid podem investigar os nove anchors num grid 3x3; surface pesquisa uma cruz.
+O preflight usa uma uniao retangular conservadora, cobrindo tambem a cruz inteira.
+Para anchor A, offset O=minimumPoint-origin e dimensoes W/D:
+ Xmin=min(Ax, Ax+Ox-16); Xmax=max(Ax, Ax+Ox+16+W-1)
+ Zmin=min(Az, Az+Oz-16); Zmax=max(Az, Az+Oz+16+D-1)
+Os extremos sao floor e depois >>4, incluindo coordenadas negativas e offsets
+nao centrados. Nao ha um raio fixo de chunks: depende do schematic e seu origin.
+Por exemplo, W=D=33, O=(-16,-16), anchor no centro do chunk: maximo 5x5 chunks.
+Todas as sondagens de altura/Nether/pedestal sao verticais, sem ampliar X/Z.
+Paste usa prontidao individual por bloco/coluna/entidade; destinos de entidades
+fora do volume tambem sao tratados individualmente.
+O footprint de dungeon usa os mesmos bounds da reserva existente:
+ localMin=(1-radius)*moduleSize-moduleSize/2
+ localMax=(radius-1)*moduleSize-moduleSize/2+moduleSize-1.
+
+Guard e threading
+A guarda ThreadLocal foi mantida e centralizada no drain compartilhado. Nosso
+codigo nao precisa mais entrar no managedBlock para scan; a guarda continua util
+contra callbacks de terceiros que executem o scheduler recursivamente. Sempre e
+liberada no finally, inclusive em falhas. Eventos novos durante a guarda apenas
+enfileiram trabalho; nao fazem scan inline nem suprimem cargas async normais.
+ChunkAccess exige a main thread, verifica isChunkLoaded antes de getChunkAt e
+recusa acesso se faltar chunk. TerrainAdequacy/Topology fazem preflight adicional
+na entrada publica antes da primeira leitura. isChunkGenerated so e chamado para
+chunks loaded: a implementacao CraftWorld pode esperar IO/managedBlock em outros.
+Nao foi necessario usar ChunkSnapshot: as leituras continuam na main thread,
+com preflight sem yield entre verificacao e leitura, preservando o scoring.
+
+Limites e configuracao
+O config.yml e criado/atualizado pelo DefaultConfig/ConfigurationEngine, como ja
+era feito no projeto; nao existe um resource config.yml estatico.
+Novas chaves, com comentarios e validacao de limites:
+ shallowUndergroundScannerEnabled: true
+ maxChunkScansPerTick: 2               # 1..32 operacoes de scan/readiness por tick
+ chunkScanBudgetMilliseconds: 2.0     # 0.1..10 ms
+A flag afeta apenas o scanner natural shallow; comandos manuais continuam disponiveis.
+O orcamento e verificado ENTRE operacoes, nao interrompe uma pontuacao em andamento.
+Um unico fitting de schematic enorme ainda pode exceder 2ms por CPU; este patch
+elimina espera por geracao, nao transforma toda pontuacao em corrotina.
+Fila compartilhada: 4096 operacoes; eviccao FIFO da mais antiga com WARN.
+Retries: ate 16 verificacoes, backoff 2,4,8,16,32,64,100,... ticks, timeout real 60s.
+Idade e ordem FIFO nao se renovam quando o trabalho e reenfileirado/deduplicado.
+Ao esgotar limite, WARN inclui descricao, mundo/UUID e bounds de chunks.
+Reload limpa continuacoes de conteudo antigo; eventos durante reload podem entrar
+na fila pausada. onDisable e WorldUnloadEvent liberam filas/tickets do mundo.
+
+Paste e pregeracao
+PasteChunkReadiness tem um futuro async por vez; so faz join APOS isDone.
+Chunks retornados sao revalidados antes do ticket, removido ao fechar. Falhas,
+timeout60s e limite16 tentativas abortam a operacao, sem anunciar sucesso.
+O fallback Spigot getChunkAt no proximo tick foi removido: um tick posterior ainda
+seria uma carga sincrona. Sem API async, a operacao falha com log.
+Nao se usa allOf porque nao existe lote de futures para scans: scans nao carregam;
+o paste pede um unico destino por vez, reduzindo pressao sobre tickets/geracao.
+Raw WorldEdit paste, exits e entidades tambem entraram na fila incremental.
+SideEffectSet.none e physics=false evitam cascatas de atualizacao de vizinhos ao
+escrever; redstone/blocos dependentes podem aguardar uma atualizacao normal.
+Pregeracao usa requests async (4 por tick, ate32 pendentes), polling main-thread,
+timeout60s, fila de espera ate4096. Excesso/falha cancela sem mudar a world border.
+Cancelar um CompletableFuture so abandona a espera do plugin; nao garante cancelar
+uma tarefa de geracao interna que o servidor ja tenha iniciado.
+Teleport usa Paper teleportAsync, timeout60s e nao faz espera bloqueante.
+
+Limites de compatibilidade e risco restante
+Nao restou getChunkAt/load/teleport sincrono NAO PROTEGIDO no codigo proprio auditado.
+getChunkAt continua sendo usado apenas para recuperar chunks comprovadamente loaded.
+As APIs publicas legadas ModularWorld.spawnChests/spawnBarrels/spawnInstancedEntities
+retornam listas imediatamente: agora exigem destinos loaded e lancam excecao se nao
+estiverem. Nao e possivel manter retorno imediato e adiar a mesma chamada sem mudar
+o contrato. O dono externo da instancia deve carregar async e chamar novamente.
+As entradas diretas EliteMobs/MythicMobs e utilitarios de terreno tambem falham cedo
+se chamados fora de seu contrato; os caminhos internos de geracao usam filas prontas.
+Callbacks de outros plugins e o codigo interno de WorldEdit/EliteMobs/MythicMobs/NMS
+nao sao controlados por este repositorio. Nosso destino esta pronto antes de cada
+chamada, mas nao posso garantir que esses componentes nao consultem outros chunks.
+Um watchdog originado numa chamada transitiva desses componentes precisa de sua
+stack inteira; desativar mobs como solucao permanente mudaria a geracao solicitada.
+Paste abortado pode deixar estrutura parcialmente colocada; nao existe rollback
+novo e nenhuma carga sync e feita para tentar conclui-la a qualquer custo.
+O budget por tick e cooperativo. Validacao em servidor real continua obrigatoria.
+
+Build e validacao
+O build original tambem falhou em ModularWorld: EliteMobs10.9.7 referencia
+MagmaCore.instance.MatchInstance, ausente do snapshot2.2.0 atualmente publicado.
+Foi reproduzido num checkout do HEAD em .validation/baseline, com o mesmo cache.
+A dependencia EXISTENTE EliteMobs (compileOnly e tests) foi alinhada a10.9.8, a versao
+do servidor do usuario, resolvendo a incompatibilidade; nenhuma dependencia nova.
+Compilacao usa Spigot API26.3 e bytecode Java21; compativel com a JVM Java25.
+Testes usam JDK25, Paper26.2 e MockBukkit26.2 ja previstos no build. Essas simulacoes
+nao substituem uma execucao em Purpur26.3. api-version1.21.4 foi preservada: usa
+somente contratos publicos compativeis, e as extensoes Paper sao chamadas por reflexao.
+A rodada final de build/testes e detalhada em build-verification.json; o jar sombreado
+esta em build/libs/BetterStructures.jar e o relatorio em build/reports/tests/test/.
+Testes novos: FIFO/dedup, backoff, maxattempts, timeout com relogio controlado,
+orcamento, sucessores no tick seguinte, limpeza, acesso off-thread, carga async
+estagnada, revalidacao/ticket, terreno/topologia com vizinho ausente, reentrancia.
+Duas fixtures existentes agora carregam explicitamente os destinos de mobs e
+contam recuperacoes de chunk, nao as sondagens isChunkLoaded que nao carregam.
+
+Roteiro manual (NAO executado nesta sessao)
+1. Em uma pasta de teste Linux, instalar Purpur26.3-2645-a2e4e44, Java25,
+   WorldEdit7.4.6-beta-02, o jar corrigido e spark. Comecar sem EliteMobs para isolar
+   terrain/paste; repetir com EliteMobs10.9.8 e todos os packs do servidor original.
+2. Gerar um mundo novo com seed fixa, overworld, view-distance10/simulation-distance4,
+   mesmas configuracoes/packs. Registrar java-version, /version e SHA256 dos jars.
+3. Ativar shallow e os budgets padrao; iniciar com -Dpaper.debug-sync-loads=true.
+   Esse diagnostico oficial e mais direto que inferir ausencia de cargas por amostras.
+4. /spark profiler start --timeout 600 --thread * --interval 1 --force-java-sampler
+   Nao usar --ignore-sleeping: queremos enxergar tambem thread estacionada/esperando.
+5. Voar em spectator/creative e com elytra em varias direcoes por terreno inedito
+   durante10 minutos; atravessar fronteiras/coord negativas; parar para deixar chunks
+   estabilizarem e confirmar estruturas superficiais, shallow/deep, liquid e sky.
+6. No spark/logs, procurar ServerChunkCache.syncLoad, getChunkFallback e managedBlock.
+   Nenhuma carga sync pode ter como chamador um scan/readiness/paste proprio de BS.
+   Inspecionar tambem chamadas BS -> terceiros; coletar stack se aparecerem.
+   Amostragem sem ocorrencias isoladamente NAO prova ausencia absoluta; cruzar com
+   debug-sync-loads, dumps e os testes que recusam retrieval ausente.
+7. Confirmar ausencia de watchdog/exit70, observar MSPT e fila descartada so quando
+   ha chunks ausentes por tempo suficiente. Ao esgotar retries, deve haver WARN com
+   mundo/bounds e o servidor deve continuar respondendo. Retornar aos chunks antes
+   do timeout deve permitir scan sem duplicar estruturas ja concluidas.
+8. Repetir com shallowUndergroundScannerEnabled=false: outros tipos continuam;
+   nao devem surgir novos shallow naturais. Depois reativar em terreno novo.
+9. Executar comandos place, pregenerate/cancelPregenerate, teleport, debug modular,
+   dungeons e exits; verificar NBT, entidades, loot e redstone apos physics=false.
+10. Enquanto voa, fazer reload DE CONTEUDO do plugin e unload de um mundo secundario.
+    Confirmar cancelamento/liberacao de tickets e ausencia de referencias/tarefas
+    desse mundo. Desativar/reiniciar o plugin e confirmar nenhuma fila antiga.
+11. Para reproduzir estagnacao sem bloquear main, usar fixture instrumentada cujo
+    getChunkAtAsync nao conclui. ChunkReadinessTest cobre este cenario deterministicamente;
+    em servidor normal nao existe comando confiavel para produzir exatamente o deadlock.
+
+Estagnacao dos vizinhos e coleta para upstream
+Pelos dados fornecidos, (13,26) depende de (13,27)/(12,27), e (9,22) de (8,23).
+Vizinhos terrain com requested_generation/generation_task=null, zero generation
+tasks e workers ociosos sao consistentes com perda/estagnacao de dependencias do
+chunk system. A evidencia nao prova quem produziu esse estado. O syncLoad de BS
+expoe a estagnacao e pode ter desencadeado uma sequencia problematica de tickets/
+reentrancia. Tambem pode haver um defeito fora do plugin (Purpur/Paper/Moonrise,
+worldgen, datapack, outro plugin, IO). O patch remove a espera do BS, mas NAO repara
+as dependencias internas do servidor nem impede outro plugin de esperar nelas.
+Coletar antes de atualizar ou alterar o ambiente de reproducao:
+- latest.log completo desde o boot, logs anteriores/stack watchdog completa e o
+  dump original; dois ou mais /paper debug chunks separados por5-10s se possivel.
+- jcmd PID Thread.print -l repetido durante a estagnacao (incluindo workers),
+  JFR curto e report spark com threads em espera; nao apenas o trecho da main.
+- /version completo, lista de plugins/versoes e SHA256, WorldEdit build exato,
+  java -version/distribuicao/flags, CPUs visiveis/quota container, logs de IO/disk.
+- server.properties, bukkit/spigot/paper-global/paper-world-defaults/purpur configs,
+  configs de geracao do mundo/plugin e overrides; remover senhas antes de compartilhar.
+- seed, generator, datapacks habilitados com versoes/SHA256, feature flags,
+  level.dat e copia dos region/poi/entities que contem os chunks afetados.
+- comparar mesma seed/datapacks: Purpur sem BS; Purpur apenas BS+WorldEdit+spark;
+  depois EliteMobs e demais plugins; comparar Paper equivalente, sem mudar tudo
+  simultaneamente. Um incidente sem BS reforca a hipotese de causa externa.
+
+Referencias oficiais verificadas
+https://jd.papermc.io/paper/26.3/org/bukkit/World.html
+https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+https://docs.papermc.io/paper/reference/system-properties/#paperdebug-sync-loads
+https://docs.papermc.io/paper/reference/commands/
+https://spark.lucko.me/docs/Command-Usage

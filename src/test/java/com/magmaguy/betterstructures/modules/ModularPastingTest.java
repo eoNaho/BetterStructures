@@ -276,11 +276,12 @@ class ModularPastingTest {
         }
 
         @Override public boolean isChunkLoaded(int x, int z) {
-            requestedChunks.add(x + "," + z);
             return true;
         }
 
         @Override public ChunkMock getChunkAt(int x, int z) {
+            // Count retrievals, rather than the additional non-loading readiness checks.
+            requestedChunks.add(x + "," + z);
             ChunkMock chunk = mock(ChunkMock.class);
             when(chunk.getX()).thenReturn(x);
             when(chunk.getZ()).thenReturn(z);

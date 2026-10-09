@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.buildingfitter;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
 import com.magmaguy.betterstructures.config.DefaultConfig;
 import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
@@ -19,12 +20,12 @@ public class FitAirBuilding extends FitAnything {
         super.structureType = GeneratorConfigFields.StructureType.SKY;
         this.schematicContainer = schematicContainer;
         this.schematicClipboard = schematicContainer.getClipboard();
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     public FitAirBuilding(Chunk chunk) {
         super.structureType = GeneratorConfigFields.StructureType.SKY;
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     private void scan(Chunk chunk) {
@@ -43,7 +44,9 @@ public class FitAirBuilding extends FitAnything {
                 altitude = ThreadLocalRandom.current().nextInt(DefaultConfig.getEndAirBuildMinAltitude(), DefaultConfig.getEndAirBuildMaxAltitude() + 1);
                 break;
         }
-        Location originalLocation = chunk.getWorld().getHighestBlockAt(chunk.getX() * 16 + 8, chunk.getZ() * 16 + 8).getLocation().add(new Vector(0, altitude, 0));
+        Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16 + 8, 0, chunk.getZ() * 16 + 8);
+
+        originalLocation.setY(ChunkAccess.highestY(originalLocation) + altitude);
 
         switch (chunk.getWorld().getEnvironment()) {
             case CUSTOM:
@@ -109,6 +112,10 @@ public class FitAirBuilding extends FitAnything {
         }
         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
 
+        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+    }
+
+    private void finishScan(Location originalLocation) {
         chunkScan(originalLocation, 0, 0);
         if (location == null)
             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {

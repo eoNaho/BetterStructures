@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.thirdparty;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.magmacore.util.Logger;
 import io.lumine.mythic.api.mobs.MythicMob;
 import io.lumine.mythic.bukkit.BukkitAdapter;
@@ -16,6 +17,7 @@ import org.bukkit.entity.Player;
 public class MythicMobs {
 
     public static boolean Spawn(Location location, String filename) {
+        ChunkAccess.requireLoaded(location.getWorld(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
         if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
             for (Player player : Bukkit.getOnlinePlayers()) {
                 if (player.hasPermission("betterstructures.*")) {

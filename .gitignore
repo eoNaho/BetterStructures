@@ -1,5 +1,6 @@
 # Gradle
 .gradle/
+.validation/
 build/
 
 # IDE

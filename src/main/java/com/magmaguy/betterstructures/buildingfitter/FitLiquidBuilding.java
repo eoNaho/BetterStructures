@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.buildingfitter;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.buildingfitter.util.TerrainAdequacy;
 import com.magmaguy.betterstructures.config.generators.GeneratorConfigFields;
 import com.magmaguy.betterstructures.schematics.SchematicContainer;
@@ -17,13 +18,13 @@ public class FitLiquidBuilding extends FitAnything {
         super.structureType = GeneratorConfigFields.StructureType.LIQUID_SURFACE;
         this.schematicContainer = schematicContainer;
         this.schematicClipboard = schematicContainer.getClipboard();
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     public FitLiquidBuilding(Chunk chunk) {
         super();
         super.structureType = GeneratorConfigFields.StructureType.LIQUID_SURFACE;
-        scan(chunk);
+        initializeWhenLoaded(chunk, this::scan);
     }
 
     private void scan(Chunk chunk) {
@@ -31,7 +32,7 @@ public class FitLiquidBuilding extends FitAnything {
         //The 8 offset on x and y is to center the anchor on the chunk
         Location originalLocation = new Location(chunk.getWorld(), chunk.getX() * 16D, 0, chunk.getZ() * 16D).add(new Vector(8, 0, 8));
         //This gets the location of the highest solid block
-        originalLocation.setY(originalLocation.getWorld().getHighestBlockYAt(originalLocation));
+        originalLocation.setY(ChunkAccess.highestY(originalLocation));
 
         switch (chunk.getWorld().getEnvironment()) {
             case CUSTOM:
@@ -57,6 +58,10 @@ public class FitLiquidBuilding extends FitAnything {
         }
         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
 
+        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+    }
+
+    private void finishScan(Location originalLocation) {
         chunkScan(originalLocation, 0, 0);
         if (highestScore < 90)
             for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {

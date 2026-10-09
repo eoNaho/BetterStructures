@@ -1,0 +1,119 @@
+.gitignore
+  Ignora JDKs/cache temporarios em .validation.
+
+build.gradle
+  Alinha EliteMobs compile/test de10.9.7 a10.9.8 para resolver incompatibilidade existente com MagmaCore snapshot; mantem APIs/toolchains.
+
+src/main/java/com/magmaguy/betterstructures/api/BuildPasteCompleteEvent.java
+  BoundingBox numerico, sem instanciar handles de blocos.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAirBuilding.java
+  Separa inicializacao de fitting adiado, protege height query; conserva altitude e scoring.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/FitAnything.java
+  Inicializacao/continuacao condicionadas a footprint completo, mantendo instancia/anchor; safety de callbacks e physics=false; paste worldId.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/FitLiquidBuilding.java
+  Separa inicializacao de fitting adiado; height query protegida e conserva validacoes/scoring.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/FitSurfaceBuilding.java
+  Separa inicializacao de fitting adiado; coluna de altura protegida; busca/scoring intactos.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/FitUndergroundBuilding.java
+  Separa inicializacao de fitting adiado para shallow/deep; Y escolhido uma vez e pontuacao somente com footprint loaded.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/util/SchematicPicker.java
+  Consulta biome somente apos ChunkAccess.block.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/util/TerrainAdequacy.java
+  Preflight antes da primeira leitura do volume; getType por block helper que recusa chunk ausente.
+
+src/main/java/com/magmaguy/betterstructures/buildingfitter/util/Topology.java
+  Preflight antes das consultas de terreno/altura; height lookup protegido.
+
+src/main/java/com/magmaguy/betterstructures/commands/PlaceCommand.java
+  Recupera chunk do jogador por helper carregado; fitting e adiado pelo mecanismo compartilhado.
+
+src/main/java/com/magmaguy/betterstructures/commands/PregenerateCommand.java
+  Remove consulta de altura desnecessaria de WORLD_CENTER (so X/Z sao usados).
+
+src/main/java/com/magmaguy/betterstructures/commands/TeleportCommand.java
+  Usa teleportAsync com timeout, sem espera na main thread ou fallback sync.
+
+src/main/java/com/magmaguy/betterstructures/config/DefaultConfig.java
+  Tres chaves documentadas: shallow scanner enabled, maxscans/tick e budgetms; validacao dos valores.
+
+src/main/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuard.java
+  Mantem finally/ThreadLocal; documenta papel contra callbacks recursivos.
+
+src/main/java/com/magmaguy/betterstructures/listeners/DeferredChunkWork.java
+  Scheduler main-thread compartilhado com budget configuravel, guard, WARN/eviccao e limpeza por mundo/reload.
+
+src/main/java/com/magmaguy/betterstructures/listeners/NewChunkLoadEvent.java
+  Eventos so enfileiram; delega drain a DeferredChunkWork, dedup e cleanup; dungeon aguarda footprint completo.
+
+src/main/java/com/magmaguy/betterstructures/modules/ModularWorld.java
+  APIs com retorno imediato exigem destinos loaded antes de alterar blocos/spawn; physics=false para containers.
+
+src/main/java/com/magmaguy/betterstructures/modules/ModulePasting.java
+  Debug/raw vai a fila com readiness; mantem alinhamento min/origin; worldId e revalidacao de container apos evento.
+
+src/main/java/com/magmaguy/betterstructures/modules/NaturalDungeonReservation.java
+  Expoe calculo de bounds para preflight; formula/geometria intacta.
+
+src/main/java/com/magmaguy/betterstructures/modules/WFCNode.java
+  Debug de blocos/textos espera footprint loaded na fila principal, sem cargas sync.
+
+src/main/java/com/magmaguy/betterstructures/thirdparty/EliteMobs.java
+  Valida chunk de destino antes de chamar API externa.
+
+src/main/java/com/magmaguy/betterstructures/thirdparty/MythicMobs.java
+  Valida chunk de destino antes de chamar API externa.
+
+src/main/java/com/magmaguy/betterstructures/util/ChunkAccess.java
+  Main-thread guard, retrieval apenas loaded, biome/block/height seguros, generatedIfLoaded e request Paper async sem fallback.
+
+src/main/java/com/magmaguy/betterstructures/util/ChunkFootprint.java
+  Bounds inclusivos com floor para negativos/fracoes; verifica todos os chunks sem gerar.
+
+src/main/java/com/magmaguy/betterstructures/util/ChunkPregenerator.java
+  Requests async limitados, polling/timeouts, aguarda conclusao de camada, limpa futures e cancela ao atingir fila4096.
+
+src/main/java/com/magmaguy/betterstructures/util/DeferredWorkQueue.java
+  Fila FIFO limitada/deduplicada, backoff,16 tentativas, timeout60s, budget e limpeza testaveis sem Bukkit.
+
+src/main/java/com/magmaguy/betterstructures/util/WorldEditUtils.java
+  Paste de entidades em fila incremental, com mesmo alinhamento origin-min; remove imports obsoletos.
+
+src/main/java/com/magmaguy/betterstructures/worldedit/PasteChunkReadiness.java
+  Remove fallback sync; timeout/limite retries, verifica future pronto e chunk loaded; tickets e cancelamento ao fechar.
+
+src/main/java/com/magmaguy/betterstructures/worldedit/Schematic.java
+  Paste raw incremental, readiness tambem para entidades; cap4096, limpeza por mundo, physics=false/sideeffects.none e worldId por operacao.
+
+src/test/java/com/magmaguy/betterstructures/listeners/ChunkScanReentrancyGuardTest.java
+  Reentrancia recusada e guarda liberada apos excecao.
+
+src/test/java/com/magmaguy/betterstructures/modules/ModularPastingTest.java
+  Conta retrievals reais em vez de isChunkLoaded, mantendo assertions de nao pedir chunks de air/barrier.
+
+src/test/java/com/magmaguy/betterstructures/modules/ModularWorldDifficultyTest.java
+  Carrega explicitamente destinos das fixtures de mobs; preserva assertions de centro/dificuldade.
+
+src/test/java/com/magmaguy/betterstructures/util/DeferredWorkQueueTest.java
+  Cinco casos de backoff/limites/dedup/eviccao/timeout/budget/sucessores/limpeza.
+
+src/test/java/com/magmaguy/betterstructures/worldedit/ChunkReadinessTest.java
+  Cinco casos de mocks: nenhum retrieval ausente, bounds negativos, future estagnado, tickets e threading.
+
+src/test/java/com/magmaguy/betterstructures/worldedit/TerrainReadinessTest.java
+  Regressao do watchdog em underground e topology: vizinho ausente antes de getBlock/height.
+
+validation/build-verification.json
+  Resultados medidos de build/testes, hash do jar e bytecode.
+
+validation/chunk-access-inventory.csv
+  Inventario completo da base, por ocorrencia/arquivo/linha/metodo/tratamento.
+
+validation/chunk-safety-report.txt
+  Fluxo, footprints, limites, compatibilidade, riscos, roteiro manual e coleta upstream.

@@ -1,5 +1,6 @@
 package com.magmaguy.betterstructures.modules;
 
+import com.magmaguy.betterstructures.util.ChunkAccess;
 import com.magmaguy.betterstructures.MetadataHandler;
 import com.magmaguy.betterstructures.api.WorldGenerationFinishEvent;
 import com.magmaguy.betterstructures.config.spawnpools.SpawnPoolsConfig;
@@ -124,7 +125,8 @@ public class ModularWorld {
     public List<Block> spawnChests() {
         List<Block> chests = new ArrayList<>();
         for (Location chestLocation : chestLocations) {
-            chestLocation.getBlock().setType(Material.CHEST);
+            ChunkAccess.requireLoaded(world, chestLocation.getBlockX() >> 4, chestLocation.getBlockZ() >> 4);
+            chestLocation.getBlock().setType(Material.CHEST, false);
             chests.add(chestLocation.getBlock());
         }
         return chests;
@@ -133,7 +135,8 @@ public class ModularWorld {
     public List<Block> spawnBarrels() {
         List<Block> barrels = new ArrayList<>();
         for (Location barrelLocation : barrelLocations) {
-            barrelLocation.getBlock().setType(Material.BARREL);
+            ChunkAccess.requireLoaded(world, barrelLocation.getBlockX() >> 4, barrelLocation.getBlockZ() >> 4);
+            barrelLocation.getBlock().setType(Material.BARREL, false);
             barrels.add(barrelLocation.getBlock());
         }
         return barrels;
@@ -230,6 +233,8 @@ public class ModularWorld {
                 }
                 Location spawnLocation = ModulePasting.entitySpawnLocation(otherLocation.location());
                 if (!customBossesConfigFields.isInstanced()) {
+                    ChunkAccess.requireLoaded(world,
+                            spawnLocation.getBlockX() >> 4, spawnLocation.getBlockZ() >> 4);
                     CustomBossEntity customBossEntity = new CustomBossEntity(customBossesConfigFields);
                     customBossEntity.spawn(spawnLocation, true);
                 } else {
@@ -243,6 +248,8 @@ public class ModularWorld {
     public List<InstancedBossEntity> spawnInstancedEntities() {
         List<InstancedBossEntity> instancedBossEntities = new ArrayList<>();
         for (ScheduledInstancedEntity scheduledInstancedEntity : scheduledInstancedEntities) {
+            ChunkAccess.requireLoaded(world,
+                    scheduledInstancedEntity.location.getBlockX() >> 4, scheduledInstancedEntity.location.getBlockZ() >> 4);
             InstancedBossEntity instancedBossEntity = new InstancedBossEntity(scheduledInstancedEntity.configFields,
                     scheduledInstancedEntity.location, scheduledInstancedEntity.level, getDifficultyId(scheduledInstancedEntity.location));
             instancedBossEntity.spawn(true);
