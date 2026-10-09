@@ -14,11 +14,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 
 public class Topology {
+    private static final int MAX_TOPOLOGY_SAMPLES_PER_CANDIDATE = 1024;
+
     public static double scan(double startingScore, int scanStep, Clipboard schematicClipboard, Location iteratedLocation, Vector schematicOffset) {
         //if (schematicOffset == null) Bukkit.getLogger().info("oops the schematic offset is null");
         double score = startingScore;
         int width = schematicClipboard.getDimensions().x();
         int depth = schematicClipboard.getDimensions().z();
+        int effectiveStep = boundedStep(scanStep, width, depth);
 
         if (!ChunkFootprint.blocks(
                 iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
@@ -29,7 +32,7 @@ public class Topology {
         ArrayList<Integer> heights = new ArrayList<>();
 
         //Scans the topology to find a mesh of the highest locations for the entirety of the x and z axi. Also does the water / lava scan
-        score = scanHighestLocations(width, depth, scanStep, iteratedLocation, schematicOffset, heights, score);
+        score = scanHighestLocations(width, depth, effectiveStep, iteratedLocation, schematicOffset, heights, score);
         if (score == 0) return 0;
 
         //Detects extreme height differences which would immediately disqualify this scan
@@ -43,6 +46,18 @@ public class Topology {
         score = scoreTerrainHeightVariation(heights, averageFloorLevel, score);
 
         return score;
+    }
+
+    /** Bound main-thread height probes for unusually wide or deep schematics. */
+    private static int boundedStep(int requestedStep, int width, int depth) {
+        int step = Math.max(1, requestedStep);
+        double points = (double) width * depth;
+        if (points <= 0) return step;
+        int estimate = (int) Math.ceil(Math.sqrt(points / MAX_TOPOLOGY_SAMPLES_PER_CANDIDATE));
+        step = Math.max(step, estimate);
+        while ((((long) width + step - 1) / step) * (((long) depth + step - 1) / step)
+                > MAX_TOPOLOGY_SAMPLES_PER_CANDIDATE) step++;
+        return step;
     }
 
     private static double scanHighestLocations(int width, int depth, int scanStep, Location iteratedLocation, Vector schematicOffset, ArrayList<Integer> heights, double score) {

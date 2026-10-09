@@ -7,6 +7,44 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeferredWorkQueueTest {
+    @Test void scanBacklogDoesNotConsumeReadinessTimeout() {
+        var queue = new DeferredWorkQueue<String, String>(4, DeferredWorkQueue.TimeoutStart.FIRST_ATTEMPT);
+        var ran = new ArrayList<String>();
+        queue.add("a", "a", 0, 0, value -> fail());
+        queue.add("b", "b", 0, 0, value -> fail());
+        long delayed = DeferredWorkQueue.TIMEOUT_NANOS * 2;
+        // Neither exhausted time budget nor operation budget starts a load timeout.
+        queue.drain(1, delayed, 2, value -> fail(), value -> fail(), value -> fail(), () -> false);
+        queue.drain(2, delayed, 1, value -> true, ran::add, value -> fail(), () -> true);
+        queue.drain(3, delayed * 2, 1, value -> true, ran::add, value -> fail(), () -> true);
+        assertEquals(List.of("a", "b"), ran);
+        assertTrue(queue.isEmpty());
+    }
+
+    @Test void firstAttemptTimeoutStillExpiresDuringBackoffAndDuplicatesDoNotResetIt() {
+        var queue = new DeferredWorkQueue<String, String>(4, DeferredWorkQueue.TimeoutStart.FIRST_ATTEMPT);
+        var dropped = new ArrayList<String>();
+        queue.add("a", "original", 0, 0, dropped::add);
+        long started = DeferredWorkQueue.TIMEOUT_NANOS * 2;
+        queue.drain(1, started, 1, value -> false, value -> fail(), dropped::add, () -> true);
+        queue.add("a", "replacement", 1, started + 1, dropped::add);
+        queue.drain(2, started + DeferredWorkQueue.TIMEOUT_NANOS, 1,
+                value -> fail(), value -> fail(), dropped::add, () -> true);
+        assertEquals(List.of("original"), dropped);
+        assertTrue(queue.isEmpty());
+    }
+
+    @Test void unstartedScanBacklogRemainsBoundedAndEvictsOldest() {
+        var queue = new DeferredWorkQueue<String, String>(2, DeferredWorkQueue.TimeoutStart.FIRST_ATTEMPT);
+        var dropped = new ArrayList<String>();
+        queue.add("a", "a", 0, 0, dropped::add);
+        queue.add("b", "b", 0, 0, dropped::add);
+        queue.drain(1, 0, 1, value -> false, value -> fail(), dropped::add, () -> true);
+        queue.add("c", "c", 1, DeferredWorkQueue.TIMEOUT_NANOS * 2, dropped::add);
+        assertEquals(List.of("a"), dropped);
+        assertEquals(2, queue.size());
+    }
+
     @Test void identifiesOverflowTimeoutAndExhaustedRetries() {
         var queue = new DeferredWorkQueue<String, String>(1);
         var reasons = new ArrayList<DeferredWorkQueue.DropReason>();
@@ -87,6 +125,21 @@ class DeferredWorkQueueTest {
         assertEquals(List.of("a", "b"), ran);
         queue.drain(2, 0, 4, value -> true, ran::add, value -> fail(), () -> true);
         assertEquals(List.of("a", "b", "c"), ran);
+    }
+
+    @Test void failedReadinessReleasesWorkAndDoesNotStopOtherChunks() {
+        var queue = new DeferredWorkQueue<String, String>(4);
+        var dropped = new ArrayList<DeferredWorkQueue.DropReason>();
+        var ran = new ArrayList<String>();
+        queue.add("a", "failed", 0, 0, value -> fail());
+        queue.add("b", "healthy", 0, 0, value -> fail());
+        queue.drainWithReason(1, 0, 2, value -> {
+            if (value.equals("failed")) throw new IllegalStateException("Async load failed");
+            return true;
+        }, ran::add, (value, reason) -> dropped.add(reason), () -> true);
+        assertEquals(List.of(DeferredWorkQueue.DropReason.FAILURE), dropped);
+        assertEquals(List.of("healthy"), ran);
+        assertTrue(queue.isEmpty());
     }
 
     @Test void unloadAndReloadCleanupReleaseQueuedWork() {

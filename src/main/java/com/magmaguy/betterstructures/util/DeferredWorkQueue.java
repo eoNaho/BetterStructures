@@ -4,16 +4,23 @@ import java.util.LinkedHashMap;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
-/** Server-thread queue. Retries never reset age, reorder FIFO eviction, or duplicate keys. */
+/** Server-thread queue. Retries never reset the timeout, reorder FIFO eviction, or duplicate keys. */
 public final class DeferredWorkQueue<K, V> {
-    public enum DropReason { QUEUE_LIMIT, TIMEOUT, ATTEMPTS }
+    public enum DropReason { QUEUE_LIMIT, TIMEOUT, ATTEMPTS, FAILURE }
+    public enum TimeoutStart { ENQUEUE, FIRST_ATTEMPT }
     public static final int MAX_ATTEMPTS = 16;
     public static final long TIMEOUT_NANOS = 60_000_000_000L;
     private final int capacity;
+    private final TimeoutStart timeoutStart;
     private final LinkedHashMap<K, Entry<V>> entries = new LinkedHashMap<>();
-    private record Entry<V>(V value, long created, long nextTick, int attempts) { }
+    private record Entry<V>(V value, Long startedAt, long nextTick, int attempts) { }
 
-    public DeferredWorkQueue(int capacity) { this.capacity = capacity; }
+    public DeferredWorkQueue(int capacity) { this(capacity, TimeoutStart.ENQUEUE); }
+
+    public DeferredWorkQueue(int capacity, TimeoutStart timeoutStart) {
+        this.capacity = capacity;
+        this.timeoutStart = java.util.Objects.requireNonNull(timeoutStart);
+    }
 
     public void add(K key, V value, long tick, long now, Consumer<V> dropped) {
         addWithReason(key, value, tick, now, (item, reason) -> dropped.accept(item));
@@ -28,7 +35,7 @@ public final class DeferredWorkQueue<K, V> {
             oldest.remove();
             dropped.accept(evicted, DropReason.QUEUE_LIMIT);
         }
-        entries.put(key, new Entry<>(value, now, tick + 1, 0));
+        entries.put(key, new Entry<>(value, timeoutStart == TimeoutStart.ENQUEUE ? now : null, tick + 1, 0));
     }
 
     public int drain(long tick, long now, int maxOperations, Predicate<V> ready,
@@ -46,14 +53,26 @@ public final class DeferredWorkQueue<K, V> {
             if (operations >= maxOperations || !withinBudget.getAsBoolean()) break;
             Entry<V> entry = entries.get(key);
             if (entry == null) continue;
-            if (now - entry.created() >= TIMEOUT_NANOS) {
+            if (entry.startedAt() != null && now - entry.startedAt() >= TIMEOUT_NANOS) {
                 entries.remove(key);
                 dropped.accept(entry.value(), DropReason.TIMEOUT);
                 continue;
             }
             if (tick < entry.nextTick()) continue;
+            if (entry.startedAt() == null) {
+                entry = new Entry<>(entry.value(), now, entry.nextTick(), entry.attempts());
+                entries.put(key, entry);
+            }
             operations++;
-            if (ready.test(entry.value())) {
+            boolean isReady;
+            try {
+                isReady = ready.test(entry.value());
+            } catch (RuntimeException failure) {
+                entries.remove(key);
+                dropped.accept(entry.value(), DropReason.FAILURE);
+                continue;
+            }
+            if (isReady) {
                 entries.remove(key);
                 run.accept(entry.value());
             } else if (entry.attempts() + 1 >= MAX_ATTEMPTS) {
@@ -61,7 +80,7 @@ public final class DeferredWorkQueue<K, V> {
                 dropped.accept(entry.value(), DropReason.ATTEMPTS);
             } else {
                 int attempts = entry.attempts() + 1;
-                entries.put(key, new Entry<>(entry.value(), entry.created(),
+                entries.put(key, new Entry<>(entry.value(), entry.startedAt(),
                         tick + backoffTicks(attempts), attempts));
             }
         }

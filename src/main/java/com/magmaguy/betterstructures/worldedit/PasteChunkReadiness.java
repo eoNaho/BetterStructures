@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 /** One requested chunk and one owned ticket per active paste; all world mutation stays on the server thread. */
 public final class PasteChunkReadiness implements AutoCloseable {
     private final World world;
+    private final boolean generate;
     private CompletableFuture<Chunk> pending;
     private Chunk held;
     private ChunkTicketLease tickets;
@@ -23,7 +24,12 @@ public final class PasteChunkReadiness implements AutoCloseable {
     private int attempts;
 
     public PasteChunkReadiness(World world) {
+        this(world, true);
+    }
+
+    public PasteChunkReadiness(World world, boolean generate) {
         this.world = world;
+        this.generate = generate;
     }
 
     public boolean ready(Location location) {
@@ -32,7 +38,11 @@ public final class PasteChunkReadiness implements AutoCloseable {
         if (Bukkit.getWorld(world.getUID()) != world)
             throw new IllegalStateException("Paste world was unloaded: " + world.getName());
         int x = location.getBlockX() >> 4, z = location.getBlockZ() >> 4;
-        if (held != null && held.getX() == x && held.getZ() == z && world.isChunkLoaded(x, z)) return true;
+        if (held != null && held.getX() == x && held.getZ() == z && world.isChunkLoaded(x, z)) {
+            pending = null;
+            attempts = 0;
+            return true;
+        }
         if (pending != null) {
             if (System.nanoTime() - requestedAt >= DeferredWorkQueue.TIMEOUT_NANOS)
                 throw new IllegalStateException("Chunk load timed out: " + world.getName() + " (" + requestedX + ", " + requestedZ + ")");
@@ -57,7 +67,18 @@ public final class PasteChunkReadiness implements AutoCloseable {
             throw new IllegalStateException("Chunk retries exhausted: " + world.getName() + " (" + x + ", " + z + ")");
         requestedX = x;
         requestedZ = z;
-        pending = ChunkAccess.request(world, x, z);
+        pending = ChunkAccess.request(world, x, z, generate);
+        // Paper's async load has a temporary ticket. Retain on completion instead of
+        // waiting for the next backoff check, which may happen after it has unloaded.
+        pending.thenAccept(loaded -> {
+            if (loaded == null) return;
+            Runnable retain = () -> {
+                if (!closed && Bukkit.getWorld(world.getUID()) == world
+                        && world.isChunkLoaded(loaded.getX(), loaded.getZ())) hold(loaded);
+            };
+            if (Bukkit.isPrimaryThread()) retain.run();
+            else Bukkit.getScheduler().runTask(MetadataHandler.PLUGIN, retain);
+        });
         return false;
     }
 

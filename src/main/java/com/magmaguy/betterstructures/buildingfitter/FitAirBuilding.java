@@ -12,8 +12,11 @@ import org.bukkit.Material;
 import org.bukkit.util.Vector;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.List;
 
 public class FitAirBuilding extends FitAnything {
+    private final List<int[]> candidates = fitCandidates(true);
+    private int candidateIndex;
 
     public FitAirBuilding(Chunk chunk, SchematicContainer schematicContainer) {
         super(schematicContainer);
@@ -112,25 +115,22 @@ public class FitAirBuilding extends FitAnything {
         }
         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
 
-        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+        finishScan(originalLocation);
     }
 
     private void finishScan(Location originalLocation) {
-        chunkScan(originalLocation, 0, 0);
-        if (location == null)
-            for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
-                for (int chunkZ = -searchRadius; chunkZ < searchRadius + 1; chunkZ++) {
-                    if (chunkX == 0 && chunkZ == 0) continue;
-                    chunkScan(originalLocation, chunkX, chunkZ);
-                    if (location != null) break;
-                }
-                if (location != null) break;
-            }
-        if (location == null) {
+        if (location != null || candidateIndex >= candidates.size()) {
+            if (location != null) paste(location);
             return;
         }
-
-        paste(location);
+        int[] candidate = candidates.get(candidateIndex++);
+        if (!fitCandidateWhenLoaded(originalLocation, candidate[0], candidate[1], () -> {
+            chunkScan(originalLocation, candidate[0], candidate[1]);
+            finishScan(originalLocation);
+        })) {
+            candidateIndex = candidates.size();
+            finishScan(originalLocation);
+        }
     }
 
     private void chunkScan(Location originalLocation, int chunkX, int chunkZ) {

@@ -45,13 +45,17 @@ public final class ChunkAccess {
     }
 
     public static CompletableFuture<Chunk> request(World world, int x, int z) {
+        return request(world, x, z, true);
+    }
+
+    public static CompletableFuture<Chunk> request(World world, int x, int z, boolean generate) {
         requireMainThread();
         try {
             // Keep the existing Spigot compile API; Paper/Purpur supplies this method.
             @SuppressWarnings("unchecked")
             var future = (CompletableFuture<Chunk>) world.getClass()
                     .getMethod("getChunkAtAsync", int.class, int.class, boolean.class)
-                    .invoke(world, x, z, true);
+                    .invoke(world, x, z, generate);
             return future;
         } catch (ReflectiveOperationException failure) {
             return CompletableFuture.failedFuture(new IllegalStateException(

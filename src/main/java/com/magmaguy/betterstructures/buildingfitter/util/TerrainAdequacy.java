@@ -12,6 +12,7 @@ import org.bukkit.Material;
 import org.bukkit.util.Vector;
 
 public class TerrainAdequacy {
+    private static final int MAX_SAMPLES_PER_CANDIDATE = 1024;
     public enum ScanType {
         SURFACE,
         UNDERGROUND,
@@ -23,6 +24,7 @@ public class TerrainAdequacy {
         int width = schematicClipboard.getDimensions().x();
         int depth = schematicClipboard.getDimensions().z();
         int height = schematicClipboard.getDimensions().y();
+        int effectiveStep = boundedStep(scanStep, width, height, depth);
 
         if (!ChunkFootprint.blocks(
                 iteratedLocation.getX() + schematicOffset.getX(), iteratedLocation.getZ() + schematicOffset.getZ(),
@@ -38,9 +40,9 @@ public class TerrainAdequacy {
         int totalCount = 0;
         int negativeCount = 0;
 
-        for (int x = 0; x < width; x += scanStep) {
-            for (int y = 0; y < height; y += scanStep) {
-                for (int z = 0; z < depth; z += scanStep) {
+        for (int x = 0; x < width; x += effectiveStep) {
+            for (int y = 0; y < height; y += effectiveStep) {
+                for (int z = 0; z < depth; z += effectiveStep) {
                     BlockState schematicBlockStateAtPosition = schematicClipboard.getBlock(BlockVector3.at(x, y, z).add(minimumPoint));
                     Material schematicMaterialAtPosition = WorldEditUtils.adaptMaterial(schematicBlockStateAtPosition);
                     boolean schematicBlockIsAir = WorldEditUtils.isAir(schematicBlockStateAtPosition);
@@ -56,6 +58,22 @@ public class TerrainAdequacy {
         double score = 100 - negativeCount * 100D / (double) totalCount;
 
         return score;
+    }
+
+    /** Keep one candidate's main-thread terrain probe bounded for unusually large schematics. */
+    private static int boundedStep(int requestedStep, int width, int height, int depth) {
+        int step = Math.max(1, requestedStep);
+        double points = (double) width * height * depth;
+        if (points <= 0) return step;
+        int estimate = (int) Math.ceil(Math.cbrt(points / MAX_SAMPLES_PER_CANDIDATE));
+        step = Math.max(step, estimate);
+        while (sampleCount(width, step) * sampleCount(height, step) * sampleCount(depth, step)
+                > MAX_SAMPLES_PER_CANDIDATE) step++;
+        return step;
+    }
+
+    private static long sampleCount(int dimension, int step) {
+        return ((long) dimension + step - 1) / step;
     }
 
     private static boolean isBlockAdequate(Location projectedWorldLocation, boolean schematicBlockIsAir, boolean schematicBlockIsLiquid, int floorHeight, ScanType scanType) {

@@ -48,7 +48,7 @@ public class NewChunkLoadEvent implements Listener {
         purgeExpiredGeneratedChunks();
         if (recentlyGeneratedChunks.containsKey(key)) return;
         rememberGeneratedChunk(key);
-        DeferredChunkWork.submit(key, key.worldId(),
+        DeferredChunkWork.submitFromChunkLoad(key, key.worldId(),
                 new ChunkFootprint(key.x(), key.z(), key.x(), key.z()),
                 "new chunk " + key.x() + "," + key.z(),
                 world -> scanNewChunk(ChunkAccess.loadedChunk(world, key.x(), key.z()), key));

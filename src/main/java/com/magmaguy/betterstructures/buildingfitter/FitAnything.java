@@ -49,6 +49,7 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 public class FitAnything {
+    private static final long MAX_CANDIDATE_FOOTPRINT_CHUNKS = 256;
     public static boolean worldGuardWarn = false;
     protected final int searchRadius = 1;
     protected final int scanStep = 3;
@@ -84,15 +85,44 @@ public class FitAnything {
                 world -> scan.accept(ChunkAccess.loadedChunk(world, x, z)));
     }
 
-    protected void fitWhenLoaded(Location anchor, Runnable fit) {
-        // Union of every candidate footprint, including the original height/biome column.
-        // Only X/Z matter: every topology and underground probe is vertical.
-        double minX = Math.min(anchor.getX(), anchor.getX() + schematicOffset.getX() - searchRadius * 16);
-        double minZ = Math.min(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() - searchRadius * 16);
-        double maxX = Math.max(anchor.getX(), anchor.getX() + schematicOffset.getX() + searchRadius * 16 + schematicClipboard.getDimensions().x() - 1);
-        double maxZ = Math.max(anchor.getZ(), anchor.getZ() + schematicOffset.getZ() + searchRadius * 16 + schematicClipboard.getDimensions().z() - 1);
-        DeferredChunkWork.submit(new Object(), anchor.getWorld().getUID(), ChunkFootprint.blocks(minX, minZ, maxX, maxZ),
-                "fit " + structureType + " at " + anchor.getBlockX() + "," + anchor.getBlockZ(), world -> fit.run());
+    /** Schedule exactly one candidate so a fit never scans a whole 3x3 search in one tick. */
+    protected boolean fitCandidateWhenLoaded(Location anchor, int chunkX, int chunkZ, Runnable fit) {
+        Location candidate = anchor.clone().add(chunkX * 16, 0, chunkZ * 16);
+        double minX = Math.min(candidate.getX(), candidate.getX() + schematicOffset.getX());
+        double minZ = Math.min(candidate.getZ(), candidate.getZ() + schematicOffset.getZ());
+        double maxX = Math.max(candidate.getX(), candidate.getX() + schematicOffset.getX()
+                + schematicClipboard.getDimensions().x() - 1);
+        double maxZ = Math.max(candidate.getZ(), candidate.getZ() + schematicOffset.getZ()
+                + schematicClipboard.getDimensions().z() - 1);
+        ChunkFootprint footprint = ChunkFootprint.blocks(minX, minZ, maxX, maxZ);
+        long chunksWide = (long) footprint.maxX() - footprint.minX() + 1;
+        long chunksDeep = (long) footprint.maxZ() - footprint.minZ() + 1;
+        if (chunksWide <= 0 || chunksDeep <= 0 || chunksWide > MAX_CANDIDATE_FOOTPRINT_CHUNKS
+                || chunksDeep > MAX_CANDIDATE_FOOTPRINT_CHUNKS
+                || chunksWide * chunksDeep > MAX_CANDIDATE_FOOTPRINT_CHUNKS) {
+            Logger.warn("Skipped " + structureType + " candidate because its terrain footprint spans "
+                    + chunksWide + "x" + chunksDeep + " chunks (limit "
+                    + MAX_CANDIDATE_FOOTPRINT_CHUNKS + ").");
+            return false;
+        }
+        DeferredChunkWork.submit(new Object(), anchor.getWorld().getUID(), footprint,
+                "fit " + structureType + " candidate at " + candidate.getBlockX() + "," + candidate.getBlockZ(),
+                world -> fit.run());
+        return true;
+    }
+
+    /** Candidate order matches the old center-first scan and its x-major 3x3 fallback. */
+    protected static java.util.List<int[]> fitCandidates(boolean diagonals) {
+        var candidates = new java.util.ArrayList<int[]>();
+        candidates.add(new int[]{0, 0});
+        for (int x = -1; x <= 1; x++) {
+            for (int z = -1; z <= 1; z++) {
+                if (x == 0 && z == 0) continue;
+                if (!diagonals && x != 0 && z != 0) continue;
+                candidates.add(new int[]{x, z});
+            }
+        }
+        return candidates;
     }
 
     public static void commandBasedCreation(Chunk chunk, GeneratorConfigFields.StructureType structureType, SchematicContainer container) {

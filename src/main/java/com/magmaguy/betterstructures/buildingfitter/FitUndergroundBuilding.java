@@ -12,8 +12,11 @@ import org.bukkit.World;
 import org.bukkit.util.Vector;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.List;
 
 public class FitUndergroundBuilding extends FitAnything {
+    private final List<int[]> candidates = fitCandidates(true);
+    private int candidateIndex;
 
     private int lowestY;
     private int highestY;
@@ -134,25 +137,22 @@ public class FitUndergroundBuilding extends FitAnything {
                 break;
         }
 
-        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+        finishScan(originalLocation);
     }
 
     private void finishScan(Location originalLocation) {
-        chunkScan(originalLocation, 0, 0);
-        if (highestScore < 90)
-            for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
-                for (int chunkZ = -searchRadius; chunkZ < searchRadius + 1; chunkZ++) {
-                    if (chunkX == 0 && chunkZ == 0) continue;
-                    chunkScan(originalLocation, chunkX, chunkZ);
-                    if (highestScore > 90) break;
-                }
-                if (highestScore > 90) break;
-            }
-
-        if (location == null)
+        if (highestScore > 90 || candidateIndex >= candidates.size()) {
+            if (location != null) paste(location);
             return;
-
-        paste(location);
+        }
+        int[] candidate = candidates.get(candidateIndex++);
+        if (!fitCandidateWhenLoaded(originalLocation, candidate[0], candidate[1], () -> {
+            chunkScan(originalLocation, candidate[0], candidate[1]);
+            finishScan(originalLocation);
+        })) {
+            candidateIndex = candidates.size();
+            finishScan(originalLocation);
+        }
     }
 
     /**

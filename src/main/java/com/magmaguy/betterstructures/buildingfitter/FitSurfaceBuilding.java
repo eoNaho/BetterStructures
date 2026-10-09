@@ -11,7 +11,11 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.util.Vector;
 
+import java.util.List;
+
 public class FitSurfaceBuilding extends FitAnything {
+    private final List<int[]> candidates = fitCandidates(false);
+    private int candidateIndex;
 
     //For commands
     public FitSurfaceBuilding(Chunk chunk, SchematicContainer schematicContainer) {
@@ -40,32 +44,22 @@ public class FitSurfaceBuilding extends FitAnything {
         }
         schematicOffset = WorldEditUtils.getSchematicOffset(schematicClipboard);
 
-        fitWhenLoaded(originalLocation, () -> finishScan(originalLocation));
+        finishScan(originalLocation);
     }
 
     private void finishScan(Location originalLocation) {
-        chunkScan(originalLocation, 0, 0);
-        if (highestScore < 50)
-            for (int chunkX = -searchRadius; chunkX < searchRadius + 1; chunkX++) {
-                for (int chunkZ = -searchRadius; chunkZ < searchRadius + 1; chunkZ++) {
-                    //Relief measure: instead of doing a 3x3 grid, this does a "+" shaped  pattern search - may want to remove this some day, if not optimal
-                    if (chunkX == -1 && chunkZ == -1 ||
-                            chunkX == 1 && chunkZ == 1 ||
-                            chunkX == -1 && chunkZ == 1 ||
-                            chunkX == 1 && chunkZ == -1) continue;
-                    chunkScan(originalLocation, chunkX, chunkZ);
-                    if (highestScore > 50) break;
-                }
-                if (highestScore > 50) break;
-            }
-
-        if (location == null) {
+        if (highestScore > 50 || candidateIndex >= candidates.size()) {
+            if (location != null) super.paste(location);
             return;
         }
-
-        //Bukkit.broadcastMessage("Fit with score = " + highestScore);
-
-        super.paste(location);
+        int[] candidate = candidates.get(candidateIndex++);
+        if (!fitCandidateWhenLoaded(originalLocation, candidate[0], candidate[1], () -> {
+            chunkScan(originalLocation, candidate[0], candidate[1]);
+            finishScan(originalLocation);
+        })) {
+            candidateIndex = candidates.size();
+            finishScan(originalLocation);
+        }
     }
 
     private void chunkScan(Location originalLocation, int chunkX, int chunkZ) {
